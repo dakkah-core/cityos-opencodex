@@ -11,9 +11,8 @@
     "unifiedLaneStatus": "pending",
     "rejoinGate": "Keep runtime and test-runner roles separate. The upstream runner crash fix and a green lane=all dispatch must prove the unified version before any role consolidation. Equal source candidate versions are not gate evidence; release and security gates remain required."
   },
-  "compatibilityCatalogs": {
-    "observedAt": "2026-10-19T12:56:56.4988577Z",
-    "evidenceBoundary": "Public registry parent declarations for source candidates; not installed resolution or validation evidence.",
+  "dependencyApiMigrations": {
+    "evidenceBoundary": "Parent ranges describe the upstream baseline. Default catalog overrides require installed consumer regression checks and affected builds; declarations alone are not compatibility evidence.",
     "bindings": [
       {
         "manifest": "package.json",
@@ -22,7 +21,16 @@
         "observedParentVersion": "8.20.0",
         "parentDeclaredRange": "^3.0.1",
         "dependency": "fast-uri",
-        "catalog": "compat-ajv8"
+        "catalog": "default"
+      },
+      {
+        "manifest": "gui/package.json",
+        "selector": "ajv@^8",
+        "parent": "ajv",
+        "observedParentVersion": "8.20.0",
+        "parentDeclaredRange": "^3.0.1",
+        "dependency": "fast-uri",
+        "catalog": "default"
       },
       {
         "manifest": "gui/package.json",
@@ -31,7 +39,7 @@
         "observedParentVersion": "8.5.31",
         "parentDeclaredRange": "^3.3.20",
         "dependency": "nanoid",
-        "catalog": "compat-postcss8"
+        "catalog": "default"
       },
       {
         "manifest": "docs-site/package.json",
@@ -40,16 +48,25 @@
         "observedParentVersion": "8.5.31",
         "parentDeclaredRange": "^3.3.20",
         "dependency": "nanoid",
-        "catalog": "compat-postcss8"
+        "catalog": "default"
       },
       {
         "manifest": "docs-site/package.json",
-        "selector": "@astrojs/starlight",
+        "selector": "js-yaml",
         "parent": "@astrojs/starlight",
         "observedParentVersion": "0.42.6",
         "parentDeclaredRange": "^4.1.1",
         "dependency": "js-yaml",
-        "catalog": "compat-starlight-yaml4"
+        "catalog": "default"
+      },
+      {
+        "manifest": "docs-site/package.json",
+        "selector": "js-yaml",
+        "parent": "@astrojs/internal-helpers",
+        "observedParentVersion": "0.11.0",
+        "parentDeclaredRange": "^4.3.0",
+        "dependency": "js-yaml",
+        "catalog": "default"
       }
     ]
   },

@@ -1,10 +1,50 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 import { materializePackageManifest, resolveBunVersion, resolveCatalogSpecifier, resolveDependency } from "../../bin/version-catalog.cjs";
 
 const read = (path: string) => JSON.parse(readFileSync(repoPath(path), "utf8"));
 const catalog = read("config/toolchains/node-typescript.json");
+
+describe("installed dependency API migrations", () => {
+  test.each(["root", "gui"])("%s Ajv resolves catalog URI references and rejects invalid data", domain => {
+    const parent = domain === "root"
+      ? createRequire(repoPath("node_modules/@modelcontextprotocol/sdk/package.json"))
+      : createRequire(createRequire(repoPath("gui/node_modules/react-doctor/package.json")).resolve("conf"));
+    const owner = createRequire(parent.resolve("ajv"));
+    const manifest = readFileSync(join(dirname(owner.resolve("fast-uri")), "package.json"), "utf8");
+    expect(JSON.parse(manifest).version).toBe(read(domain === "root" ? "package.json" : "gui/package.json").catalog["fast-uri"]);
+    const Ajv = parent("ajv") as new (options: { allErrors: boolean }) => {
+      addSchema(schema: object): unknown;
+      compile(schema: object): (data: unknown) => boolean;
+    };
+    const ajv = new Ajv({ allErrors: true });
+    ajv.addSchema({ $id: "https://catalog.example.test/value.json", type: "string" });
+    const validate = ajv.compile({
+      $id: "https://catalog.example.test/input.json", type: "object",
+      properties: { value: { $ref: "value.json" } }, required: ["value"], additionalProperties: false,
+    });
+    expect(validate({ value: "accepted" })).toBe(true);
+    expect(validate({ value: 42 })).toBe(false);
+    expect(validate({})).toBe(false);
+    const uri = owner("fast-uri") as { resolve(base: string, reference: string): string };
+    expect(() => uri.resolve("https://catalog.example.test/", "\u0000invalid")).toThrow();
+  });
+
+  test.each(["gui", "docs-site"])("%s PostCSS uses the catalog Nano ID API", domain => {
+    const parent = createRequire(repoPath(domain, "package.json"));
+    const owner = createRequire(parent.resolve("postcss"));
+    const manifest = readFileSync(join(dirname(owner.resolve("nanoid/non-secure")), "../package.json"), "utf8");
+    expect(JSON.parse(manifest).version).toBe(read(`${domain}/package.json`).catalog.nanoid);
+    const postcss = parent("postcss") as { parse(css: string): { toString(): string; source?: { input: { id: string } } } };
+    const css = "a { color: red }";
+    const parsed = postcss.parse(css);
+    expect(parsed.toString()).toBe(css);
+    expect(parsed.source?.input.id).toMatch(/^<input css [\w-]{6}>$/);
+  });
+});
 
 describe("catalog resolution before installation", () => {
   const pkg = {
@@ -64,7 +104,7 @@ describe("fork tooling sources", () => {
     expect(docker).toContain("gate is PENDING");
   });
 
-  test("older transitive APIs use named owner-scoped compatibility catalogs", () => {
+  test("migrated third-party APIs resolve through their default catalogs", () => {
     const root = read("package.json");
     const gui = read("gui/package.json");
     const docs = read("docs-site/package.json");
@@ -72,20 +112,27 @@ describe("fork tooling sources", () => {
     expect(gui.catalog.nanoid).toBe("6.0.2");
     expect(docs.catalog.nanoid).toBe("6.0.2");
     expect(docs.catalog["js-yaml"]).toBe("5.5.0");
-    expect(materializePackageManifest(root).overrides["ajv@^8"]["fast-uri"]).toBe("3.1.8");
+    for (const pkg of [root, gui]) {
+      expect(materializePackageManifest(pkg).overrides["ajv@^8"]["fast-uri"]).toBe(pkg.catalog["fast-uri"]);
+      expect(pkg.catalogs["compat-ajv8"]).toBeUndefined();
+    }
     for (const pkg of [gui, docs]) {
       const prepared = materializePackageManifest(pkg);
-      expect(prepared.overrides.postcss).toEqual({ ".": pkg.catalog.postcss, nanoid: "3.3.20" });
+      expect(prepared.overrides.postcss).toEqual({ ".": pkg.catalog.postcss, nanoid: pkg.catalog.nanoid });
+      expect(pkg.catalogs?.["compat-postcss8"]).toBeUndefined();
       expect(pkg.overrides.nanoid).toBeUndefined();
     }
     expect(root.overrides["fast-uri"]).toBeUndefined();
-    expect(docs.overrides["js-yaml"]).toBeUndefined();
-    expect(materializePackageManifest(docs).overrides["@astrojs/starlight"]["js-yaml"]).toBe("4.3.2");
-    expect(catalog.compatibilityCatalogs.bindings).toHaveLength(4);
-    for (const binding of catalog.compatibilityCatalogs.bindings) {
+    expect(docs.overrides["js-yaml"]).toBe("catalog:");
+    expect(materializePackageManifest(docs).overrides["js-yaml"]).toBe(docs.catalog["js-yaml"]);
+    expect(catalog.dependencyApiMigrations.bindings).toHaveLength(6);
+    for (const binding of catalog.dependencyApiMigrations.bindings) {
       const pkg = read(binding.manifest);
-      expect(pkg.overrides[binding.selector][binding.dependency]).toBe(`catalog:${binding.catalog}`);
-      expect(pkg.catalogs[binding.catalog][binding.dependency]).not.toBe(pkg.catalog[binding.dependency]);
+      expect(binding.catalog).toBe("default");
+      const selected = pkg.overrides[binding.selector];
+      const prepared = materializePackageManifest(pkg).overrides[binding.selector];
+      expect(typeof selected === "string" ? selected : selected[binding.dependency]).toBe("catalog:");
+      expect(typeof prepared === "string" ? prepared : prepared[binding.dependency]).toBe(pkg.catalog[binding.dependency]);
       expect(binding.parentDeclaredRange).toStartWith("^");
     }
   });

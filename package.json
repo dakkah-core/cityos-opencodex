@@ -57,8 +57,7 @@
     "qs": "6.16.1"
   },
   "catalogs": {
-    "test-runner": { "bun": "1.4.3" },
-    "compat-ajv8": { "fast-uri": "3.1.8" }
+    "test-runner": { "bun": "1.4.3" }
   },
   "testRunnerBun": "catalog:test-runner",
   "scripts": {
@@ -117,7 +116,7 @@
   },
   "overrides": {
     "@hono/node-server": "catalog:",
-    "ajv@^8": { "fast-uri": "catalog:compat-ajv8" },
+    "ajv@^8": { "fast-uri": "catalog:" },
     "hono": "catalog:",
     "ip-address": "catalog:",
     "qs": "catalog:"

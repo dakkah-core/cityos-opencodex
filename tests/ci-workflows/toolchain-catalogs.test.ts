@@ -95,7 +95,9 @@ describe("fork tooling sources", () => {
     for (const domain of catalog.lockDomains) {
       const prefix = domain === "." ? "" : `${domain}/`;
       const pkg = read(`${prefix}package.json`);
-      expect(pkg.workspaces).toBeUndefined();
+      // Bun activates native catalog parsing only for a workspace owner. Empty
+      // members preserve four independent locks rather than enrolling siblings.
+      expect(pkg.workspaces).toEqual({ packages: [] });
       expect(pkg.engines.node).toBe(catalog.nodeEngine);
       expect(readFileSync(repoPath(`${prefix}bun.lock`), "utf8")).not.toBeEmpty();
       const materialized = materializePackageManifest(pkg);

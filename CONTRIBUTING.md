@@ -36,6 +36,22 @@ Source development requires the `bun` CLI on your `PATH`. The published npm pack
 Bun runtime for end users. Package scripts such as `bun run test` and `bun run prepush` may resolve
 Bun through that bundled dependency.
 
+Tooling Node is selected from `config/toolchains/node-typescript.json`. Dependency versions live in
+each package's `catalog` / `catalogs`; root, GUI, docs and desktop keep separate Bun locks. The
+GUI compiler uses stable TypeScript 7. React Doctor alone has a scoped TypeScript 6 API alias.
+
+Named compatibility catalogs keep transitive APIs within their owners' declared ranges:
+Ajv 8 declares fast-uri `^3.0.1`, PostCSS 8 declares nanoid `^3.3.20`, and Starlight declares
+js-yaml `^4.1.1`. Their overrides apply only to those parents; default catalogs select the latest
+stable majors. The exact observed parent versions and catalog bindings are recorded in the
+toolchain catalog. This source selection makes no claim about installed transitive versions.
+
+Use `node scripts/npm-with-catalogs.mjs install` for a clean npm-only source bootstrap and
+`node scripts/npm-with-catalogs.mjs pack` for npm package assembly. These use separate concrete
+manifests; npm cannot install or pack the source `catalog:` declarations directly. The bootstrap
+installs bundled Bun without requiring a separate Bun installation. Existing source dependencies
+should be maintained with their owning Bun lock instead of repeating this clean bootstrap.
+
 ## CI policy (maintainer decision — do not change)
 
 - Pull requests run **only the fast Ubuntu subset**.
@@ -69,7 +85,9 @@ A ready-for-review PR is the author's claim that the change is complete, underst
 
 ## Local validation and hooks
 
-The suite uses Bun 1.4.3 (`testRunnerBun`) while the shipped runtime is 1.4.2.
+The suite source candidate is Bun 1.4.3 (`testRunnerBun`); the runtime source candidate is Bun 1.4.3.
+The roles remain separate. The upstream crash regression and green `lane=all` gate are pending;
+matching source versions do not establish validation, release eligibility or security approval.
 `scripts/test.ts` finds a 1.4.3 binary on PATH or in `~/.bun/bin`, or uses
 `OCX_TEST_RUNNER_BUN`; install that version locally if it is missing.
 

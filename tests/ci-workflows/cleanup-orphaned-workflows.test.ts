@@ -68,7 +68,7 @@ describe("orphaned GitHub Actions cleanup", () => {
       step.uses === "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
     )).toBe(true);
     expect(steps.some(step =>
-      step.uses === "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6"
+      step.uses === "./.github/actions/setup-project-bun"
     )).toBe(true);
     expect(steps.some(step =>
       step.run === "bun scripts/ci/cleanup-orphaned-workflows.mjs"

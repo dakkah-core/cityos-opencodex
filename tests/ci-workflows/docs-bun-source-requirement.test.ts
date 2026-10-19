@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { repoPath } from "../helpers/repo-root";
+import { resolveBunVersion } from "../../bin/version-catalog.cjs";
 
 /**
  * Every contributor entry point must say that building from source needs a local `bun`, and
@@ -53,11 +54,13 @@ test("source development docs require a local Bun CLI while preserving the bundl
   }
 });
 
-test("contributor docs report the test and shipped Bun pins from package.json", async () => {
+test("contributor docs report separate Bun source candidates and a pending unified gate", async () => {
   const pkg = await Bun.file(repoPath("package.json")).json();
   for (const path of ["CONTRIBUTING.md", "docs-site/src/content/docs/contributing.md"]) {
     const text = await Bun.file(repoPath(path)).text();
-    const versions = /The suite uses Bun (\d+\.\d+\.\d+) \([^)]*testRunnerBun[^)]*\) while the shipped runtime is (\d+\.\d+\.\d+)\./.exec(text);
-    expect(versions?.slice(1)).toEqual([pkg.testRunnerBun, pkg.dependencies.bun]);
+    const versions = /The suite source candidate is Bun (\d+\.\d+\.\d+) \([^)]*testRunnerBun[^)]*\); the runtime source candidate is Bun (\d+\.\d+\.\d+)\./.exec(text);
+    expect(versions?.slice(1)).toEqual([resolveBunVersion(pkg, "test-runner"), resolveBunVersion(pkg, "runtime")]);
+    expect(text).toContain("The roles remain separate.");
+    expect(text).toContain("green `lane=all` gate are pending");
   }
 });

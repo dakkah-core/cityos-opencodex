@@ -87,7 +87,7 @@ if (import.meta.main) {
   const override = process.env.TYPECHECK_CMD;
   const [cmd, ...args]: string[] = override
     ? (override.trimStart().startsWith("[") ? JSON.parse(override) as string[] : override.split(" "))
-    : [process.execPath, "x", "tsc", "-b"];
+    : [process.execPath, "run", "typecheck"];
 
   const result = spawnSync(cmd!, args, {
     cwd: guiDir,

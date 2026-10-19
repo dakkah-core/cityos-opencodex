@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { resolveTestRunnerBun, type TestRunnerBunDeps } from "../../scripts/lib/test-runner-bun";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
-import { testRunnerBun } from "../../package.json";
+import { testRunnerBun } from "../../scripts/lib/test-runner-bun";
 
 function fixture(overrides: Partial<TestRunnerBunDeps> = {}): TestRunnerBunDeps {
   return {

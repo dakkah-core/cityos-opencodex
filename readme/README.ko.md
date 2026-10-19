@@ -92,7 +92,7 @@ DeepSeek, Kimi, Qwen, Ollama를 비롯한 어떤 LLM이든 Codex, Claude Code, C
 ### 개인 설치 (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
+npm install -g @bitkyc08/opencodex   # Node 26; Bun 런타임은 자동으로 번들됩니다
 ocx start                         # 프록시 + 대시보드: localhost:10100
 ```
 
@@ -263,7 +263,7 @@ ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 �
 | Linux (x64 / arm64) | 완전 지원 | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
 | Windows (x64) | 완전 지원 | Task Scheduler (숨김) / 선택적 네이티브 서비스 (`--native`, WinSW) | x64 `.msi` |
 
-CLI 설치에는 [Node](https://nodejs.org) 18 이상이 필요하고, 데스크톱 앱은 Node와 Bun 모두 필요 없습니다. Bun 런타임은 `npm install` 때 번들되므로 따로 설치할
+CLI 설치에는 [Node](https://nodejs.org) 26이 필요하고, 데스크톱 앱은 Node와 Bun 모두 필요 없습니다. Bun 런타임은 `npm install` 때 번들되므로 따로 설치할
 필요가 없고, Windows에서도 WSL이 필요 없습니다. npm이 번들 런타임의 설치 스크립트를 막았다면
 [설치 문서](https://opencodex.me/ko/getting-started/installation/)를 보세요.
 

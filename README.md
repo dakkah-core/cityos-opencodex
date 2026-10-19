@@ -92,7 +92,7 @@ account while existing threads stay pinned to the account that started them.
 ### Personal install (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
+npm install -g @bitkyc08/opencodex   # Node 26; the Bun runtime is bundled automatically
 ocx start                         # proxy + dashboard on localhost:10100
 ```
 
@@ -270,7 +270,7 @@ when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the r
 | Linux (x64 / arm64) | Fully supported | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
 | Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) | x64 `.msi` |
 
-The CLI install requires [Node](https://nodejs.org) 18+; the desktop app needs neither Node nor Bun. The Bun runtime is bundled on `npm install` — no separate
+The CLI install requires [Node](https://nodejs.org) 26; the desktop app needs neither Node nor Bun. The Bun runtime is bundled on `npm install` — no separate
 Bun install needed, no WSL needed on Windows. If npm blocked the bundled runtime's install scripts,
 see the [installation docs](https://opencodex.me/getting-started/installation/).
 

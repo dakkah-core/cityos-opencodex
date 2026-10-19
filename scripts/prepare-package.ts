@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateCompatibilityVersionManifest } from "./generate-compatibility-version";
@@ -38,6 +38,10 @@ export function normalizePackageModes(packageRoot: string): void {
 // assembly. The output stays untracked to avoid a self-referential digest, but
 // package.json already ships src/** so the generated artifact is embedded.
 if (import.meta.main) {
+  if (["pack", "publish"].includes(process.env.npm_command ?? "")
+      && JSON.parse(readFileSync(join(root, "package.json"), "utf8")).catalog) {
+    throw new Error("Use node scripts/npm-with-catalogs.mjs pack|publish so shipped metadata contains concrete versions.");
+  }
   generateCompatibilityVersionManifest(root);
   normalizePackageModes(root);
 }

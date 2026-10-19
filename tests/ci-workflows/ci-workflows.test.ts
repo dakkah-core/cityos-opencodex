@@ -166,7 +166,7 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("./.github/actions/setup-project-bun");
     expect(await readText(".github/actions/setup-project-bun/action.yml"))
       .toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
-    expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
+    expect(workflow).toContain("./.github/actions/setup-project-node");
     expect(workflow).toContain("bun test --isolate tests");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
 
@@ -767,7 +767,7 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("./.github/actions/setup-project-bun");
     expect(await readText(".github/actions/setup-project-bun/action.yml"))
       .toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
-    expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
+    expect(workflow).toContain("./.github/actions/setup-project-node");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
 
     // The post-release bump has write authority, but dev is a mutable integration
@@ -5261,7 +5261,7 @@ describe("GitHub Actions hardening", () => {
     );
 
     // Engine pin: the action wrapper would fetch react-doctor@latest without it.
-    expect(workflow).toContain('version: "0.9.11"');
+    expect(workflow).toContain('version: ${{ steps.doctor.outputs.version }}');
 
     // Action pin must accept CLI JSON schemaVersion 3 (baseline reports from 0.9.x).
     // v2.1.0's ensure-json-report only knew schemas 1–2 and failed every PR scan.
@@ -5283,7 +5283,7 @@ describe("GitHub Actions hardening", () => {
     const rootPkg = await readText("package.json");
     const doctorConfig = await readText("gui/doctor.config.json");
 
-    expect(guiPkg).toContain("react-doctor@0.9.11");
+    expect(JSON.parse(guiPkg).catalog["react-doctor"]).toBe("0.9.18");
     expect(guiPkg).not.toContain("react-doctor@latest");
     expect(rootPkg).not.toContain("react-doctor@latest");
     expect(doctorConfig).toContain('"blocking": "warning"');

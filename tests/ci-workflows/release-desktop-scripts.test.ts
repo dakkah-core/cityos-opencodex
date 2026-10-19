@@ -13,6 +13,7 @@ import {
 } from "../../desktop/scripts/build-local";
 import { buildUpdaterManifest, platformFiles, writeUpdaterManifest } from "../../desktop/scripts/updater-manifest";
 import { standaloneArchiveName, standaloneTargets } from "../../scripts/standalone-targets";
+import { resolveDependency } from "../../bin/version-catalog.cjs";
 import {
   expectedReleaseAssets,
   parseMinisignPublicKey,
@@ -439,7 +440,7 @@ describe("the desktop build toolchain carries the bundle-type marker", () => {
     const manifest = JSON.parse(readFileSync(repoPath("desktop", "package.json"), "utf8")) as {
       devDependencies?: Record<string, string>;
     };
-    const version = manifest.devDependencies?.["@tauri-apps/cli"];
+    const version = resolveDependency(manifest, "@tauri-apps/cli", "devDependencies").version;
     expect(version).toBeDefined();
     const [major, minor] = version!.split(".").map(Number);
     expect(

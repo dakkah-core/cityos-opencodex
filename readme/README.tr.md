@@ -92,7 +92,7 @@ kullanılan sağlıklı hesaba kendiliğinden gitsin; mevcut dizilerse onları b
 ### Kişisel kurulum (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; Bun çalışma zamanı otomatik olarak paketlenir
+npm install -g @bitkyc08/opencodex   # Node 26; Bun çalışma zamanı otomatik olarak paketlenir
 ocx start                         # proxy + kontrol paneli, localhost:10100
 ```
 
@@ -275,7 +275,7 @@ ulaşamadıklarında sıfırdan farklı bir kodla çıkar). `ocx status` / `ocx 
 | Linux (x64 / arm64) | Tam destekleniyor | systemd (kullanıcı birimi) | x86_64 `.AppImage` / `.deb` |
 | Windows (x64) | Tam destekleniyor | Görev Zamanlayıcı (gizli) / isteğe bağlı yerel servis (`--native`, WinSW) | x64 `.msi` |
 
-CLI kurulumu [Node](https://nodejs.org) 18 veya üzerini gerektirir; masaüstü uygulamasının ne Node'a ne de Bun'a ihtiyacı vardır. Bun çalışma zamanı `npm install` sırasında paketlenir —
+CLI kurulumu [Node](https://nodejs.org) 26 gerektirir; masaüstü uygulamasının ne Node'a ne de Bun'a ihtiyacı vardır. Bun çalışma zamanı `npm install` sırasında paketlenir —
 ayrıca Bun kurmanıza gerek yok, Windows'ta WSL de gerekmez. npm, paketlenmiş çalışma zamanının kurulum
 betiklerini engellediyse [kurulum belgelerine](https://opencodex.me/tr/getting-started/installation/) bakın.
 

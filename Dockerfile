@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1
 
 # Keep the runtime aligned with package.json and pin the multi-platform image index.
-# Runtime 1.4.2 fixes #6684's Windows Bun.fetch streaming; CI tests run on 1.4.3
-# because 1.4.2 segfaults reloading preloads in multi-file --isolate (#4821;
+# Runtime and test-runner source candidates both select 1.4.3. The unified-version
+# lane=all gate is PENDING; this image selection proves neither execution nor release.
+# Previously 1.4.2 segfaulted reloading preloads in multi-file --isolate (#4821;
 # #6713 run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9) and 1.4.0's spawnSync
 # can lose a child's exit (#4956, oven-sh/bun#44581). Rejoin after the
-# upstream crash fix passes a unified-version lane=all dispatch, then delete
-# package.json's testRunnerBun pin and setup-project-bun's role input.
-ARG BUN_IMAGE=oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895
+# upstream crash fix passes a unified-version lane=all dispatch. Keep package.json's
+# testRunnerBun pin and setup-project-bun's role input, plus release and security gates.
+ARG BUN_IMAGE=oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598
 
 FROM ${BUN_IMAGE} AS manifest
 WORKDIR /home/bun/app

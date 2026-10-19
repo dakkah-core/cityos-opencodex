@@ -11,7 +11,7 @@ opencodex를 설치하면 같은 실행 파일을 가리키는 `ocx`와 `opencod
 
 | 요구 사항 | 이유 |
 | --- | --- |
-| **[Node](https://nodejs.org) ≥ 18** | `ocx`는 Bun 런타임에서 실행되지만, 런타임이 `npm install` 시 자동으로 번들되므로 Bun을 직접 설치할 필요가 **없습니다**. |
+| **[Node](https://nodejs.org) 26** | `ocx`는 Bun 런타임에서 실행되지만, 런타임이 `npm install` 시 자동으로 번들되므로 Bun을 직접 설치할 필요가 **없습니다**. |
 | **[OpenAI Codex](https://openai.com/codex)**(CLI, App, 또는 SDK) | opencodex가 앞단에 위치하는 클라이언트입니다. opencodex는 `$CODEX_HOME/config.toml`(기본값 `~/.codex/config.toml`)에 기록합니다. |
 | 프로바이더 계정 또는 API 키 | Anthropic, xAI, Kimi, Ollama Cloud, OpenRouter, OpenAI API 키, OpenAI 호환 엔드포인트, 또는 ChatGPT 로그인. |
 
@@ -27,7 +27,7 @@ install-scripts ... blocked because they are not covered by allowScripts`).
 이 경우 번들 Bun 런타임이 준비되지 않을 수 있습니다. 런처는 허용된 번들 복구를
 시도한 다음, 절대 경로 PATH 디렉터리의 실행 가능한 Bun을 검증합니다. 정식 버전의
 major가 패키지 pin과 같고 minor가 pin 이상이면 사용할 수 있습니다. 현재 의존성
-1.4.2에서는 1.4.0 이상, 2.0.0 미만입니다. 제한 시간 안에 버전 정책과 identity를 확인하며,
+1.4.3에서는 1.4.0 이상, 2.0.0 미만입니다. 제한 시간 안에 버전 정책과 identity를 확인하며,
 `bun --version` 출력이 `bun -e`로 확인한 `Bun.version`과 같아야 합니다. POSIX에서는 런처가
 상위 디렉터리와 심볼릭 링크를 따라 도달하는 구성 요소를 포함한 후보 경로 전체를 검사합니다.
 검사하는 각 디렉터리와 심볼릭 링크, 최종 실행 파일은 root 또는 런처의 유효 사용자 소유여야 합니다.

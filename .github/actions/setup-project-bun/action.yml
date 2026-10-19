@@ -1,15 +1,16 @@
 name: Setup project Bun
 description: >-
-  Install the package.json Bun pin for a job's role: dependencies.bun for
-  runtime (default), or testRunnerBun for test-runner.
+  Resolve the package.json Bun source candidate for runtime (default) or test-runner.
 
-# Runtime 1.4.2 fixes #6684's Windows Bun.fetch stream truncation. The test runner
-# skipped 1.4.2: #4821 reverted #4064 after its multi-file --isolate preload segfault
+# Both role candidates select 1.4.3; the unified-version lane=all gate is PENDING.
+# Selecting a candidate does not prove the runner crash fixed or any lane green.
+# Previously, runtime 1.4.2 addressed #6684's Windows Bun.fetch stream truncation;
+# the test runner skipped it after its multi-file --isolate preload segfault
 # (#6713 run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9). It moved from 1.4.0 to
 # 1.4.3 for oven-sh/bun#44581: 1.4.0's Bun.spawnSync could lose a child's exit after
 # finalizers ran inside an earlier call and spin past its own timeout (#4956).
-# Rejoin only after the upstream runner crash is fixed and a green lane=all
-# dispatch proves the unified version; then delete testRunnerBun and this role input.
+# Keep both roles. Consolidation requires the upstream crash fix and a green
+# lane=all dispatch; release and security gates still apply.
 inputs:
   role:
     description: Bun role to install (runtime or test-runner).
@@ -32,22 +33,17 @@ runs:
       run: |
         node <<'NODE'
         const pkg = require('./package.json');
+        const { resolveBunVersion } = require('./bin/version-catalog.cjs');
         const role = process.env.BUN_ROLE;
-        let key;
         let version;
-        switch (role) {
-          case 'runtime': key = 'dependencies.bun'; version = pkg.dependencies?.bun; break;
-          case 'test-runner': key = 'testRunnerBun'; version = pkg.testRunnerBun; break;
-          default:
-            console.error(`::error::Unknown Bun role: ${role}`);
-            process.exit(1);
-        }
-        if (typeof version !== 'string' || version !== version.trim() || !/^\d+\.\d+\.\d+$/.test(version)) {
-          console.error(`::error::Missing or invalid package.json ${key} for Bun role ${role}`);
+        try {
+          version = resolveBunVersion(pkg, role);
+        } catch (error) {
+          console.error(`::error::${error.message}`);
           process.exit(1);
         }
         require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
-        console.log(`Using Bun ${version} from package.json ${key} (${role})`);
+        console.log(`Using Bun source candidate ${version} from the package.json catalog (${role}); unified lane gate pending`);
         NODE
 
     - name: Setup Bun

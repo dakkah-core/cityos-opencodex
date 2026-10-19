@@ -94,7 +94,7 @@ Ollama или любую другую LLM с Codex, Claude Code, Claude Desktop 
 ### Личная установка (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; рантайм Bun подключается автоматически
+npm install -g @bitkyc08/opencodex   # Node 26; рантайм Bun подключается автоматически
 ocx start                         # прокси + панель управления на localhost:10100
 ```
 
@@ -281,7 +281,7 @@ ocx init      # интерактивная настройка: пишет ~/.ope
 | Linux (x64 / arm64) | Полная поддержка | systemd (пользовательский unit) | `.AppImage` / `.deb` для x86_64 |
 | Windows (x64) | Полная поддержка | Task Scheduler (скрыто) / опциональная нативная служба (`--native`, WinSW) | `.msi` для x64 |
 
-Для установки CLI требуется [Node](https://nodejs.org) 18+; настольному приложению не нужны ни Node, ни Bun. Рантайм Bun добавляется автоматически при `npm install` —
+Для установки CLI требуется [Node](https://nodejs.org) 26; настольному приложению не нужны ни Node, ни Bun. Рантайм Bun добавляется автоматически при `npm install` —
 отдельно устанавливать Bun не нужно, WSL на Windows тоже не нужен. Если npm заблокировал
 скрипты установки встроенного рантайма, см. [документацию по установке](https://opencodex.me/ru/getting-started/installation/).
 

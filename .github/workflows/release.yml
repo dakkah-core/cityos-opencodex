@@ -833,12 +833,11 @@ jobs:
 
       # node + npm perform the actual publish. registry-url points npm at the public registry.
       - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: ./.github/actions/setup-project-node
         with:
-          node-version: 24
           registry-url: "https://registry.npmjs.org"
 
-      # Trusted Publishing (OIDC) needs npm >= 11.5.1. Node 24 runners already
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1. The selected Node runtime must
       # provide a compatible npm; avoid replacing the bundled npm because global
       # npm self-updates can lose publish-time dependencies such as sigstore.
       - name: Verify npm version
@@ -984,7 +983,7 @@ jobs:
 
       # Tokenless publish via Trusted Publishing (OIDC) — NO NPM_TOKEN secret. npm auto-detects the
       # OIDC environment (`id-token: write` above) and generates provenance automatically, so neither a
-      # token nor `--provenance` is needed. `npm publish` runs prepublishOnly first (typecheck + build
+      # token nor `--provenance` is needed. The catalog wrapper runs prepublishOnly first (typecheck + build
       # the GUI into gui/dist), so even a dry-run fully verifies the build.
       # PREREQUISITE: configure the Trusted Publisher for this repo + workflow on npmjs.com — possible
       # only AFTER the package's first version exists (do the first publish locally, see the runbook).
@@ -1115,9 +1114,9 @@ jobs:
           elif [ "$DRY_RUN" = "true" ]; then
             echo "::notice::DRY RUN — building + packing, not publishing"
             npm run prepublishOnly
-            npm pack --dry-run
+            node scripts/npm-with-catalogs.mjs pack --dry-run
           else
-            npm publish --tag "$NPM_DIST_TAG" --access public
+            node scripts/npm-with-catalogs.mjs publish --tag "$NPM_DIST_TAG" --access public
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "Publication acknowledged for ${pkg_name}@${RELEASE_VERSION} at ${GITHUB_SHA}. If any later step in this run fails, re-dispatch with the same version and expected-sha plus resume-after-npm-publish: true — never republish this version." >> "$GITHUB_STEP_SUMMARY"
           fi

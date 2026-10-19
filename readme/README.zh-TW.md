@@ -90,7 +90,7 @@ Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 或任何其他 LLM。它�
 ### 個人安裝（CLI）
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+；Bun 執行環境會自動打包
+npm install -g @bitkyc08/opencodex   # Node 26；Bun 執行環境會自動打包
 ocx start                         # 代理 + 儀表板位於 localhost:10100
 ```
 
@@ -260,7 +260,7 @@ ocx init      # 互動式設定：寫入 ~/.opencodex/config.json 並接上 Code
 | Linux (x64 / arm64) | 完整支援 | systemd（使用者單元） | x86_64 `.AppImage` / `.deb` |
 | Windows (x64) | 完整支援 | Task Scheduler（隱藏）／可選原生服務（`--native`、WinSW） | x64 `.msi` |
 
-CLI 安裝需要 [Node](https://nodejs.org) 18+；桌面應用程式則不需要 Node 或 Bun。Bun 執行環境在 `npm install` 時一併打包——不必另外安裝
+CLI 安裝需要 [Node](https://nodejs.org) 26；桌面應用程式則不需要 Node 或 Bun。Bun 執行環境在 `npm install` 時一併打包——不必另外安裝
 Bun，Windows 也不需要 WSL。若 npm 攔截了打包執行環境的安裝腳本，
 見[安裝文件](https://opencodex.me/zh-tw/getting-started/installation/)。
 

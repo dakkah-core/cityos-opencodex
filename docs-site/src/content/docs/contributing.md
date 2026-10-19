@@ -32,6 +32,21 @@ yourself — the dev server is unaffected because it rebuilds on demand.
 
 ## Build and test commands
 
+Tooling Node comes from `config/toolchains/node-typescript.json`. Each of the root, GUI, docs and
+desktop packages owns its dependency catalog and Bun lock; install them separately. First-party
+checking uses TypeScript 7. The GUI scopes its TypeScript 6 API alias to React Doctor only.
+
+The named `compat-ajv8`, `compat-postcss8` and `compat-starlight-yaml4` catalogs preserve
+fast-uri `^3.0.1` for Ajv 8, nanoid `^3.3.20` for PostCSS 8, and js-yaml `^4.1.1` for Starlight.
+Overrides are scoped to those owners. Default catalogs select the latest stable majors;
+installed transitive resolution still requires separate validation. Observed parent versions
+and the exact selectors are recorded in `config/toolchains/node-typescript.json`.
+
+For an npm-only source checkout with no root `node_modules`, use
+`node scripts/npm-with-catalogs.mjs install`. Package with
+`node scripts/npm-with-catalogs.mjs pack`; it prepares a separate directory with concrete versions
+and matching compatibility metadata. Keep using the owning Bun lock for existing installations.
+
 The root package is Bun-native TypeScript; there is no separate server compile step. Use the checked-in
 scripts so local commands match CI:
 
@@ -45,7 +60,9 @@ bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
 
-The suite uses Bun 1.4.3 (`package.json`'s `testRunnerBun`) while the shipped runtime is 1.4.2.
+The suite source candidate is Bun 1.4.3 (`package.json`'s `testRunnerBun`); the runtime source candidate is Bun 1.4.3.
+The roles remain separate. The upstream crash regression and green `lane=all` gate are pending;
+matching source versions do not establish validation, release eligibility or security approval.
 `scripts/test.ts` finds a 1.4.3 binary on PATH or in `~/.bun/bin`, or uses `OCX_TEST_RUNNER_BUN`.
 Install that version locally if it is missing; the resolver never downloads it.
 

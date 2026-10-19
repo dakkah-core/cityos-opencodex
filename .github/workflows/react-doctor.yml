@@ -45,12 +45,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: ./.github/actions/setup-project-node
+
+      - name: Resolve React Doctor catalog version
+        id: doctor
+        shell: bash
+        run: |
+          node <<'NODE'
+          const pkg = require('./gui/package.json');
+          const { resolveDependency } = require('./bin/version-catalog.cjs');
+          const { version } = resolveDependency(pkg, 'react-doctor', 'devDependencies');
+          if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Invalid React Doctor pin');
+          require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+
       - uses: millionco/react-doctor@01820bb4fd4d0a4aebcd8df2b2a143a098649cb2 # v2.2.8
         with:
           directory: gui
           # Pin the npm engine — the action wrapper would otherwise fetch
           # react-doctor@latest, silently skewing CI from the local pinned runs.
-          version: "0.9.11"
+          version: ${{ steps.doctor.outputs.version }}
           # Fail the job on any finding (errors or warnings).
           blocking: warning
           comment: false

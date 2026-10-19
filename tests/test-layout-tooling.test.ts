@@ -7,7 +7,7 @@ import { repoPath, repoRoot } from "./helpers/repo-root";
 import { listTestFiles, planMoves } from "../scripts/test-layout/plan";
 import { runMove } from "../scripts/test-layout/move";
 import { runVerify } from "../scripts/test-layout/verify";
-import { testRunnerBun } from "../package.json";
+import { testRunnerBun } from "../scripts/lib/test-runner-bun";
 import {
   anchors,
   currentPath,

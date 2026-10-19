@@ -96,6 +96,24 @@ describe("runKeyringSmoke", () => {
     expect(generated.equals(Buffer.alloc(32))).toBe(true);
   });
 
+  test("zeros the number array returned by keyring 2", async () => {
+    const readback = Array<number>(32).fill(0x5a);
+    const generated = Buffer.alloc(32, 0x5a);
+    let deleted = false;
+    await runKeyringSmoke({
+      createEntry: async () => ({
+        setSecret: async () => {},
+        getSecret: async () => readback,
+        deleteCredential: async () => { deleted = true; return true; },
+      }),
+      createRandomBytes: () => generated,
+      createId: () => "keyring-2-fixture",
+    });
+    expect(deleted).toBeTrue();
+    expect(readback).toEqual(Array<number>(32).fill(0));
+    expect(generated.equals(Buffer.alloc(32))).toBeTrue();
+  });
+
   test("preserves a readback error when deletion returns false", async () => {
     const entry = new MemoryKeyringEntry();
     const generated = Buffer.alloc(32, 0x5a);

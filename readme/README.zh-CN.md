@@ -91,7 +91,7 @@ Codex 认证管理一个 **ChatGPT 账户池**：添加账户，在仪表板中�
 ### 个人安装（CLI）
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+；Bun 运行时会自动捆绑
+npm install -g @bitkyc08/opencodex   # Node 26；Bun 运行时会自动捆绑
 ocx start                         # 代理 + 仪表板：localhost:10100
 ```
 
@@ -263,7 +263,7 @@ ocx init      # 交互式设置：写入 ~/.opencodex/config.json 并接入 Code
 | Linux (x64 / arm64) | 完整支持 | systemd（用户单元） | x86_64 `.AppImage` / `.deb` |
 | Windows (x64) | 完整支持 | 任务计划程序（隐藏） / 可选原生服务 (`--native`，WinSW) | x64 `.msi` |
 
-CLI 安装需要 [Node](https://nodejs.org) 18+；桌面应用既不需要 Node 也不需要 Bun。Bun 运行时在 `npm install` 时捆绑 —— 无需单独安装
+CLI 安装需要 [Node](https://nodejs.org) 26；桌面应用既不需要 Node 也不需要 Bun。Bun 运行时在 `npm install` 时捆绑 —— 无需单独安装
 Bun，Windows 也不需要 WSL。如果 npm 拦截了捆绑运行时的安装脚本，见
 [安装文档](https://opencodex.me/zh-cn/getting-started/installation/)。
 

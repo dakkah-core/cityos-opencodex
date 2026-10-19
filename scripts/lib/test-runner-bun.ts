@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
-import { testRunnerBun } from "../../package.json";
+import pkg from "../../package.json";
+import { resolveBunVersion } from "../../bin/version-catalog.cjs";
+
+export const testRunnerBun = resolveBunVersion(pkg, "test-runner");
 
 export interface TestRunnerBunDeps {
   pin: string;

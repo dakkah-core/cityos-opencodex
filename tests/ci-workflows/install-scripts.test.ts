@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizePackageModes } from "../../scripts/prepare-package";
+import { resolveBunVersion, resolveDependency } from "../../bin/version-catalog.cjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 
@@ -66,7 +67,8 @@ describe("install scripts", () => {
     expect(pkg.main).toBe("./bin/package-main.mjs");
     expect(pkg.exports?.["."]?.bun).toBe("./src/index.ts");
     expect(pkg.exports?.["."]?.default).toBe("./bin/package-main.mjs");
-    // Bun 1.4.2 fixes the Windows fetch streaming regression reported in #6684.
+    // Both source role candidates now select stable 1.4.3; the unified gate is pending.
+    // Historical Bun 1.4.2 addressed the Windows fetch streaming regression in #6684.
     // CI's testRunnerBun skipped 1.4.2: it segfaults while RE-LOADING the bunfig
     // preload that `--isolate` re-enters once per test file:
     // `load_preloads -> JSModuleLoader::loadModule -> JSPromise::status` dereferences a dead
@@ -93,13 +95,13 @@ describe("install scripts", () => {
     // and spun past its own timeout. Scratch run 38213764818 stalled 8 of 252 Linux shard 1/4
     // batch-5 runs that way (CLI child a zombie, its pidfd armed but never polled).
     // tests/ci-workflows/test-runner-spawnsync-finalizer.test.ts keeps the runner above it.
-    // Rejoin after the upstream runner crash is fixed and a green `lane=all` dispatch
-    // proves the unified version; then delete testRunnerBun and the setup action's role.
-    expect(pkg.dependencies?.bun).toBe("1.4.2");
-    expect(pkg.testRunnerBun).toBe("1.4.3");
-    expect(pkg.dependencies?.zod).toBe("4.4.3");
-    expect(pkg.devDependencies?.typescript).toBe("7.0.2");
-    expect(pkg.devDependencies?.["@types/bun"]).toBe("1.4.0");
+    // Keep the roles and release/security gates. Equal source pins do not prove the
+    // upstream crash regression fixed or a green `lane=all` dispatch achieved.
+    expect(resolveBunVersion(pkg, "runtime")).toBe("1.4.3");
+    expect(resolveBunVersion(pkg, "test-runner")).toBe("1.4.3");
+    expect(resolveDependency(pkg, "zod").version).toBe("4.6.7");
+    expect(resolveDependency(pkg, "typescript", "devDependencies").version).toBe("7.0.2");
+    expect(resolveDependency(pkg, "@types/bun", "devDependencies").version).toBe("1.4.3");
     expect(pkg.scripts?.dev).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:proxy"]).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:gui"]).toBe("cd gui && bun run dev");
@@ -139,7 +141,7 @@ describe("install scripts", () => {
   test("POSIX installer matches the Node launcher prerequisite", async () => {
     const script = await readText("scripts/install.sh");
 
-    expect(script).toContain("Node.js 18+ is required");
+    expect(script).toContain("Node.js 26 is required");
     expect(script).toContain("npm install -g @bitkyc08/opencodex");
     expect(script).toContain("command -v ocx");
     expect(script).toContain("ocx help");
@@ -150,7 +152,7 @@ describe("install scripts", () => {
   test("PowerShell installer matches the Node launcher prerequisite", async () => {
     const script = await readText("scripts/install.ps1");
 
-    expect(script).toContain("Node.js 18+ is required");
+    expect(script).toContain("Node.js 26 is required");
     expect(script).toContain("& $npm.Source install -g @bitkyc08/opencodex");
     expect(script).toContain("$LASTEXITCODE");
     expect(script).toContain("Get-Command ocx.cmd");

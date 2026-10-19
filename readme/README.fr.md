@@ -93,7 +93,7 @@ tandis que les fils existants restent associés au compte qui les a démarrés.
 ### Installation personnelle (CLI)
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+ ; le runtime Bun est inclus automatiquement
+npm install -g @bitkyc08/opencodex   # Node 26 ; le runtime Bun est inclus automatiquement
 ocx start                         # proxy + tableau de bord sur localhost:10100
 ```
 
@@ -276,7 +276,7 @@ s'il est inaccessible). `ocx status` / `ocx doctor` / `ocx health` indiquent l'�
 | Linux (x64 / arm64) | Entièrement pris en charge | systemd (unité utilisateur) | x86_64 `.AppImage` / `.deb` |
 | Windows (x64) | Entièrement pris en charge | Planificateur de tâches (masqué) / service natif en option (`--native`, WinSW) | x64 `.msi` |
 
-L'installation de la CLI nécessite [Node](https://nodejs.org) 18+ ; l'application de bureau n'a besoin ni de Node ni de Bun. L'environnement d'exécution Bun est inclus lors de `npm install` — aucune installation
+L'installation de la CLI nécessite [Node](https://nodejs.org) 26 ; l'application de bureau n'a besoin ni de Node ni de Bun. L'environnement d'exécution Bun est inclus lors de `npm install` — aucune installation
 séparée de Bun n'est nécessaire, ni WSL sous Windows. Si npm a bloqué les scripts d'installation de l'environnement inclus,
 consultez la [documentation d'installation](https://opencodex.me/fr/getting-started/installation/).
 

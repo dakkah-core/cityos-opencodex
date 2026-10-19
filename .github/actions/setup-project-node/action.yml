@@ -1,0 +1,35 @@
+name: Setup project Node
+description: Select the fork tooling runtime from its canonical catalog.
+inputs:
+  registry-url:
+    description: Optional npm registry URL, forwarded to setup-node.
+    required: false
+    default: ""
+outputs:
+  version:
+    description: Exact catalog Node version.
+    value: ${{ steps.resolve.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve tooling Node version
+      id: resolve
+      shell: bash
+      run: |
+        node <<'NODE'
+        const { node } = require('./config/toolchains/node-typescript.json');
+        if (typeof node !== 'string' || !/^\d+\.\d+\.\d+$/.test(node)) {
+          throw new Error('Missing or invalid canonical Node version');
+        }
+        require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, `version=${node}\n`);
+        NODE
+    - name: Setup Node
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: ${{ steps.resolve.outputs.version }}
+        registry-url: ${{ inputs.registry-url }}
+    - name: Verify tooling Node version
+      shell: bash
+      env:
+        EXPECTED_NODE: ${{ steps.resolve.outputs.version }}
+      run: node -e 'if (process.version !== `v${process.env.EXPECTED_NODE}`) throw new Error("Canonical Node runtime mismatch")'

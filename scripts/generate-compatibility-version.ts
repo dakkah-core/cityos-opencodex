@@ -41,8 +41,8 @@ function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** Build the frozen CL-00 compatibility-version manifest from exact Git-tracked working-tree bytes. */
-export function buildCompatibilityVersionManifest(repoRoot: string): CompatibilityVersionManifest {
+/** Hash tracked source bytes, with an explicit package-assembly manifest projection when supplied. */
+export function buildCompatibilityVersionManifest(repoRoot: string, options: { packageManifestBytes?: Uint8Array } = {}): CompatibilityVersionManifest {
   const root = resolve(repoRoot);
   const output = execFileSync(
     "git",
@@ -62,7 +62,9 @@ export function buildCompatibilityVersionManifest(repoRoot: string): Compatibili
     if (!stat.isFile() || stat.isSymbolicLink()) {
       throw new Error(`compatibility manifest path is not a regular file: ${path}`);
     }
-    rows.push({ path, sha256: sha256(readFileSync(fullPath)) });
+    const bytes = path === "package.json" && options.packageManifestBytes !== undefined
+      ? options.packageManifestBytes : readFileSync(fullPath);
+    rows.push({ path, sha256: sha256(bytes) });
   }
 
   for (const required of REQUIRED_ROOT_FILES) {
@@ -82,9 +84,9 @@ export function buildCompatibilityVersionManifest(repoRoot: string): Compatibili
   };
 }
 
-export function generateCompatibilityVersionManifest(repoRoot?: string, destinationPath?: string): string {
+export function generateCompatibilityVersionManifest(repoRoot?: string, destinationPath?: string, options: { packageManifestBytes?: Uint8Array } = {}): string {
   const root = repoRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const manifest = buildCompatibilityVersionManifest(root);
+  const manifest = buildCompatibilityVersionManifest(root, options);
   const outputPath = destinationPath ? resolve(destinationPath) : join(root, ...SELF_PATH.split("/"));
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");

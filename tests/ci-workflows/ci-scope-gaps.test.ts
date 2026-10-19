@@ -8,7 +8,7 @@
  * suite, and an arm in the aggregate gate.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -53,11 +53,11 @@ describe("an edit to the setup action alone", () => {
     const steps = jobs["setup-action"]?.steps ?? [];
     const setups = steps.filter(step => step.uses === "./.github/actions/setup-project-bun");
     expect(setups.map(step => step.with?.role ?? "runtime")).toEqual(["runtime", "test-runner"]);
-    for (const [index, key] of ["dependencies.bun", "testRunnerBun"].entries()) {
+    for (const [index, role] of ["runtime", "test-runner"].entries()) {
       const setup = setups[index]!;
       const check = steps[steps.indexOf(setup) + 1]!;
       expect(check.env?.RESOLVED).toBe(`\${{ steps.${setup.id}.outputs.version }}`);
-      expect(check.run).toContain(`require('./package.json').${key}`);
+      expect(check.run).toContain(`node bin/resolve-version.mjs bun ${role}`);
       expect(check.run).toContain('installed="$(bun --version)"');
       expect(check.run).toContain('[ "$RESOLVED" != "$declared" ] || [ "$installed" != "$declared" ]');
       expect(check.run).toContain("exit 1");
@@ -65,7 +65,7 @@ describe("an edit to the setup action alone", () => {
   });
 });
 
-// #6713: user runtimes and compiled artifacts need 1.4.2; isolate runners need the testRunnerBun pin (1.4.3, #4956).
+// #6713: both source role candidates select 1.4.3; the unified lane gate is still pending.
 // Check the active setup at each test command, so a later role switch cannot evade the guard.
 const runsBunTests = (step: Step): boolean =>
   /\bbun\s+test\b|\bbun\s+run\s+test(?::changed)?(?:\s|$)|\bbun\s+(?:run\s+)?scripts\/test\.ts\b|scripts\/ci\/run-bun-test-batches\.sh/.test(
@@ -154,6 +154,8 @@ function resolveBunPin(pkg: unknown, role = bunAction.inputs.role.default) {
   const output = join(fixture, "output");
   try {
     writeFileSync(join(fixture, "package.json"), JSON.stringify(pkg));
+    mkdirSync(join(fixture, "bin"));
+    copyFileSync(repoPath("bin", "version-catalog.cjs"), join(fixture, "bin", "version-catalog.cjs"));
     writeFileSync(output, "");
     const result = Bun.spawnSync(["node", "-e", resolver], {
       cwd: fixture, env: { ...process.env, BUN_ROLE: role, GITHUB_OUTPUT: output },
@@ -182,6 +184,16 @@ describe("setup-project-bun pin resolution", () => {
       expect(result).toMatchObject({ status: 1, output: "" });
       expect(result.stderr).toContain("Unknown Bun role");
     }
+  });
+
+  test("resolves catalogs for both roles before invoking setup-bun", () => {
+    const catalogPkg = {
+      catalog: { bun: "1.4.3" }, catalogs: { tests: { bun: "1.4.3" } },
+      dependencies: { bun: "catalog:" }, testRunnerBun: "catalog:tests",
+    };
+    expect(resolveBunPin(catalogPkg)).toMatchObject({ status: 0, output: "version=1.4.3\n" });
+    expect(resolveBunPin(catalogPkg, "test-runner")).toMatchObject({ status: 0, output: "version=1.4.3\n" });
+    expect(resolveBunPin({ ...catalogPkg, catalog: {} })).toMatchObject({ status: 1, output: "" });
   });
 
   test("each role fails closed on missing, empty, non-string and unpinned values", () => {

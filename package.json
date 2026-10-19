@@ -35,12 +35,31 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=26.0.0 <27.0.0"
   },
   "trustedDependencies": [
     "bun"
   ],
-  "testRunnerBun": "1.4.3",
+  "catalog": {
+    "@bufbuild/protobuf": "2.16.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@napi-rs/keyring": "2.1.2",
+    "bun": "1.4.3",
+    "zod": "4.6.7",
+    "@types/bun": "1.4.3",
+    "typescript": "7.0.2",
+    "wreq-js": "3.2.0",
+    "@hono/node-server": "2.1.5",
+    "fast-uri": "4.2.2",
+    "hono": "4.13.13",
+    "ip-address": "10.7.4",
+    "qs": "6.16.1"
+  },
+  "catalogs": {
+    "test-runner": { "bun": "1.4.3" },
+    "compat-ajv8": { "fast-uri": "3.1.8" }
+  },
+  "testRunnerBun": "catalog:test-runner",
   "scripts": {
     "dev": "bun run src/cli/index.ts start",
     "dev:proxy": "bun run src/cli/index.ts start",
@@ -48,7 +67,7 @@
     "start": "bun run src/cli/index.ts start",
     "test": "bun scripts/test.ts",
     "test:changed": "bun scripts/test.ts --changed=dev",
-    "typecheck": "bun x tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "typecheck:gui:if-changed": "bun scripts/typecheck-gui-if-changed.ts",
     "audit:high": "bun audit --audit-level=high && cd gui && bun audit --audit-level=high",
     "privacy:scan": "bun scripts/privacy-scan.ts",
@@ -66,6 +85,9 @@
     "build:standalone": "bun scripts/build-standalone.ts",
     "test:macos": "swift run --package-path app MenuBarCoreTests",
     "prepare:package": "bun scripts/prepare-package.ts",
+    "prepare:package:npm": "bun scripts/prepare-npm-manifest.ts",
+    "install:npm": "node scripts/npm-with-catalogs.mjs install",
+    "pack:npm": "node scripts/npm-with-catalogs.mjs pack",
     "prepack": "bun run prepare:package",
     "prepublishOnly": "bun run audit:high && bun run typecheck && bun run build:gui",
     "release": "bun scripts/release.ts",
@@ -79,25 +101,25 @@
     "setup:hooks": "bun scripts/setup-hooks.ts"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.14.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "@napi-rs/keyring": "1.3.0",
-    "bun": "1.4.2",
-    "zod": "4.4.3"
+    "@bufbuild/protobuf": "catalog:",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "@napi-rs/keyring": "catalog:",
+    "bun": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/bun": "1.4.0",
-    "typescript": "7.0.2"
+    "@types/bun": "catalog:",
+    "typescript": "catalog:"
   },
   "optionalDependencies": {
-    "wreq-js": "2.3.1"
+    "wreq-js": "catalog:"
   },
   "overrides": {
-    "@hono/node-server": "2.1.0",
-    "fast-uri": "^3.1.7",
-    "hono": "4.13.8",
-    "ip-address": "^10.4.0",
-    "qs": "^6.16.0"
+    "@hono/node-server": "catalog:",
+    "ajv@^8": { "fast-uri": "catalog:compat-ajv8" },
+    "hono": "catalog:",
+    "ip-address": "catalog:",
+    "qs": "catalog:"
   },
   "keywords": [
     "codex",

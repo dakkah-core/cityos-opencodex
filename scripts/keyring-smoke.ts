@@ -4,7 +4,7 @@ import { loadKeyringBinding } from "../src/lib/keyring-native";
 
 export interface KeyringSmokeEntry {
   setSecret(secret: Uint8Array, signal?: AbortSignal): Promise<void>;
-  getSecret(signal?: AbortSignal): Promise<Uint8Array | null>;
+  getSecret(signal?: AbortSignal): Promise<Uint8Array | number[] | null>;
   deleteCredential(signal?: AbortSignal): Promise<boolean>;
 }
 
@@ -30,7 +30,7 @@ export async function runKeyringSmoke({
   const account = `ci-${createId()}`;
   const secret = createRandomBytes(32);
   let entry: KeyringSmokeEntry | null = null;
-  let readback: Uint8Array | null = null;
+  let readback: Uint8Array | number[] | null = null;
   let stored: Buffer | null = null;
   let operationFailed = false;
   let operationError: unknown;

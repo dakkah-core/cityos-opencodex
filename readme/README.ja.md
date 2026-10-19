@@ -92,7 +92,7 @@ Desktop、Grok Build から使えます。Codex 認証用の **ChatGPT アカウ
 ### 個人向けインストール（CLI）
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18 以上。Bun ランタイムは自動で同梱されます
+npm install -g @bitkyc08/opencodex   # Node 26。Bun ランタイムは自動で同梱されます
 ocx start                         # プロキシとダッシュボードが localhost:10100 で起動
 ```
 
@@ -271,7 +271,7 @@ ocx init      # 対話式セットアップ: ~/.opencodex/config.json を書き�
 | Linux (x64 / arm64) | 完全対応 | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
 | Windows (x64) | 完全対応 | タスクスケジューラ（非表示）/ 任意のネイティブサービス（`--native`、WinSW） | x64 `.msi` |
 
-CLI インストールには [Node](https://nodejs.org) 18 以上が必要です。デスクトップアプリには Node も Bun も不要です。Bun ランタイムは `npm install` で同梱されるので、Bun を
+CLI インストールには [Node](https://nodejs.org) 26が必要です。デスクトップアプリには Node も Bun も不要です。Bun ランタイムは `npm install` で同梱されるので、Bun を
 別途入れる必要も、Windows で WSL を使う必要もありません。npm が同梱ランタイムのインストールスクリプト
 をブロックした場合は[インストールドキュメント](https://opencodex.me/ja/getting-started/installation/)を
 参照してください。

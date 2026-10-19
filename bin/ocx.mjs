@@ -9,6 +9,7 @@
  * src/cli/index.ts — only the published npm/pnpm `bin` routes through here.)
  */
 import { spawn, spawnSync } from "node:child_process";
+import { resolveBunVersion } from "./version-catalog.cjs";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
 import { planDesktopCliHandoff, runDesktopCliHandoff } from "../src/lib/desktop-cli-handoff.mjs";
 import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
@@ -106,7 +107,7 @@ function currentPackageVersion() {
 function pinnedBunVersion() {
   try {
     const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
-    return typeof pkg.dependencies?.bun === "string" ? pkg.dependencies.bun : "";
+    return resolveBunVersion(pkg, "runtime");
   } catch {
     return "";
   }

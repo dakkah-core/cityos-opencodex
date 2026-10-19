@@ -25,7 +25,6 @@ export default defineConfig({
       title: "opencodex",
       description:
         "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI, App, SDK, and Claude Code.",
-      tagline: "Use any LLM with OpenAI Codex and Claude Code.",
       logo: {
         light: "./src/assets/logo-light.png",
         dark: "./src/assets/logo-dark.png",

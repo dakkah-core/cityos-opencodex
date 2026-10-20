@@ -3,8 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=26.0.0 <27.0.0" },
-  "workspaces": { "packages": [] },
+  "engines": {
+    "node": ">=26.0.0 <27.0.0"
+  },
+  "workspaces": {
+    "packages": []
+  },
   "catalog": {
     "@astrojs/starlight": "0.42.6",
     "@fontsource-variable/geist": "5.3.0",
@@ -17,14 +21,17 @@
     "nanoid": "6.0.2",
     "postcss": "8.5.31",
     "smol-toml": "1.9.1",
-    "js-yaml": "5.5.0"
+    "js-yaml": "5.5.0",
+    "get-tsconfig": "4.14.3",
+    "rolldown": "1.2.14"
   },
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "prepare:astro-stable-config": "node ../scripts/toolchains/astro-stable-config/generate.mjs --write"
   },
   "dependencies": {
     "@astrojs/starlight": "catalog:",
@@ -35,14 +42,24 @@
     "sharp": "catalog:",
     "simple-icons": "catalog:"
   },
+  "devDependencies": {
+    "rolldown": "catalog:"
+  },
   "patchedDependencies": {
     "@astrojs/starlight@0.42.6": "patches/@astrojs%2Fstarlight@0.42.6.patch",
-    "@astrojs/internal-helpers@0.11.0": "patches/@astrojs%2Finternal-helpers@0.11.0.patch"
+    "@astrojs/internal-helpers@0.11.0": "patches/@astrojs%2Finternal-helpers@0.11.0.patch",
+    "get-tsconfig@4.14.3": "patches/get-tsconfig@4.14.3.patch"
   },
   "overrides": {
     "svgo": "catalog:",
-    "postcss": { ".": "catalog:", "nanoid": "catalog:" },
+    "postcss": {
+      ".": "catalog:",
+      "nanoid": "catalog:"
+    },
     "smol-toml": "catalog:",
-    "js-yaml": "catalog:"
+    "js-yaml": "catalog:",
+    "astro@7.4.1": {
+      "get-tsconfig": "catalog:"
+    }
   }
 }

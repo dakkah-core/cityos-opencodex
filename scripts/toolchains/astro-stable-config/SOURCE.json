@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "role": "source-plan-router",
+  "active": {
+    "provider": "get-tsconfig@4.14.3",
+    "inputs": "stable4/SOURCE.json",
+    "generator": "generate.mjs",
+    "acceptance": "acceptance.mjs",
+    "consumerReferenceInputs": "stable4/SOURCE.json consumer.inputs (original Astro only)",
+    "productionBinding": "NOT_APPLIED; generator may bind only after a real generated provider patch exists"
+  },
+  "inert": {
+    "status": "DEPRECATED_UNMAINTAINED_DO_NOT_ACTIVATE",
+    "inputs": "inert/tsconfck/SOURCE.json",
+    "archivedGenerator": "inert/tsconfck/generate.mjs",
+    "archivedAcceptance": "inert/tsconfck/acceptance.mjs",
+    "retainedSources": [
+      "source/astro/",
+      "source/tsconfck/",
+      "upstream/astro/",
+      "upstream/tsconfck/"
+    ],
+    "note": "Historical proposal only; no active generator or test imports it. Original Astro consumer is preserved."
+  }
+}

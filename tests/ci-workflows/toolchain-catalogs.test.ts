@@ -108,7 +108,7 @@ describe("fork tooling sources", () => {
     const root = read("package.json");
     const gui = read("gui/package.json");
     const docs = read("docs-site/package.json");
-    expect(root.catalog["fast-uri"]).toBe("4.2.2");
+    expect(root.catalog["fast-uri"]).toBe("4.2.3");
     expect(gui.catalog.nanoid).toBe("6.0.2");
     expect(docs.catalog.nanoid).toBe("6.0.2");
     expect(docs.catalog["js-yaml"]).toBe("5.5.0");
@@ -216,4 +216,30 @@ describe("fork tooling sources", () => {
     expect(posix).toContain(`if [ "$NODE_MAJOR" -ne ${catalog.nodeMajor} ]; then`);
     expect(powershell).toContain(`if ($nodeMajor -ne ${catalog.nodeMajor}) {`);
   });
+});
+
+// Source contracts run actual isolated compilation and behavior through catalog
+// Node. Generation and docs installation precede installed consumer acceptance.
+import { existsSync as hasStableConfigConsumer } from "node:fs";
+import { installedContract, installedCases, patchFormatContract, securityContract, securityCases, sourceContract, sourceCases } from "../../scripts/toolchains/astro-stable-config/acceptance.mjs";
+
+describe("Astro stable config provider canonical source", () => {
+  test("patch generation preserves upstream files without an EOF newline", async () => {
+    await patchFormatContract();
+  });
+  test.each([...sourceCases, "ts7-type-contract", "esm-cjs", "determinism"])("%s", async name => {
+    await sourceContract(name);
+  }, 120_000);
+});
+
+describe.skipIf(!hasStableConfigConsumer(repoPath("docs-site/node_modules/astro/dist/core/config/tsconfig.js")))("installed Astro stable config consumer", () => {
+  test.each(installedCases)("%s", async name => {
+    await installedContract(name);
+  }, 120_000);
+});
+
+describe("Astro stable config security boundaries", () => {
+  test.each(securityCases)("%s", async name => {
+    await securityContract(name);
+  }, 30_000);
 });

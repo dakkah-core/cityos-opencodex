@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 type Finding = {
   file: string;
@@ -119,6 +120,36 @@ function isAllowedEmail(file: string, email: string): boolean {
   if (/^(?:[a-z]+_)?\d+x\d+@[23]x\.(?:png|jpe?g|gif|webp|tiff?)$/i.test(email)) return true;
   return file.startsWith("tests/") && email === "a@b.com";
 }
+
+/** Stable pnpm patch basenames contain an exact version, not a mailbox domain. */
+function isPnpmPatchPath(text: string, match: RegExpExecArray): boolean {
+  if (!/^[A-Z0-9._%+-]+@\d+\.\d+\.\d+\.patch$/i.test(match[0])) return false;
+  const boundary = /[\s"\x60<>]/;
+  let start = match.index;
+  let end = match.index + match[0].length;
+  while (start > 0 && !boundary.test(text[start - 1] ?? "")) start -= 1;
+  while (end < text.length && !boundary.test(text[end] ?? "")) end += 1;
+  // Prose may terminate a path with punctuation, but punctuation inside a URL
+  // must not turn its suffix into a separate relative-path candidate.
+  const punctuated = text.slice(start, end).replace(/[;,]$/, "");
+  const parenthesized = punctuated.startsWith("(") && punctuated.endsWith(")")
+    ? punctuated.slice(1, -1) : punctuated;
+  const token = parenthesized.startsWith("'") && parenthesized.endsWith("'")
+    ? parenthesized.slice(1, -1) : parenthesized;
+  // A scoped patch basename has two @ signs and an encoded scope separator;
+  // unlike an unscoped version-shaped address, it is not mailbox syntax.
+  const relative = /^@[A-Z0-9._-]+%2F/i.test(token) ? "patches/" + token : token;
+  // Check the whole relative token. URLs, userinfo and suffixes are not paths.
+  return /^(?:\.{1,2}[/\\])*(?:[A-Z0-9._-]+[/\\])*patches[/\\](?:@[A-Z0-9._-]+(?:%2F|[/\\]))?[A-Z0-9][A-Z0-9._-]*@(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.patch$/i.test(relative);
+}
+
+// This record conserves published upstream manifests, including attribution and
+// repository locators. Bind the entire reviewed payload, not an address or field
+// name. Any byte change requires fresh review; every non-email detector still runs.
+const PUBLIC_UPSTREAM_RECORD = {
+  path: "scripts/toolchains/astro-stable-config/stable4/SOURCE.json",
+  sha256: "550009b653de2dd850d682f2d9e77d6d4d4332f59032773c464dacbb9bb62677",
+} as const;
 
 /**
  * Whether this occurrence is git-attribution provenance rather than contact data.
@@ -270,6 +301,8 @@ function addFindingsForPattern(
  */
 export function scanText(file: string, text: string): Finding[] {
   const findings: Finding[] = [];
+  const immutableAttribution = file === PUBLIC_UPSTREAM_RECORD.path
+    && createHash("sha256").update(text, "utf8").digest("hex") === PUBLIC_UPSTREAM_RECORD.sha256;
   addFindingsForPattern(
     findings,
     file,
@@ -286,6 +319,8 @@ export function scanText(file: string, text: string): Finding[] {
     /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
     match =>
       isAllowedEmail(file, match[0])
+      || isPnpmPatchPath(text, match)
+      || immutableAttribution
       || (file.startsWith("devlog/") && isGitAttributionContext(lineAt(text, match.index ?? 0))),
   );
   addFindingsForPattern(

@@ -12,7 +12,9 @@
  * exemption was widened, which is the only way this can go wrong.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { scanText } from "../../scripts/privacy-scan";
+import { repoPath } from "../helpers/repo-root";
 
 /** Assembled at runtime so this file carries no bare address of its own. */
 const mailbox = (local: string, domain: string): string => [local, domain].join("@");
@@ -40,6 +42,145 @@ describe("privacy scan: Retina asset names", () => {
     ];
     for (const line of cases) {
       expect(scanText("src/example.ts", line).some(finding => finding.kind === "email")).toBe(true);
+    }
+  });
+});
+
+describe("privacy scan: immutable dependency inputs", () => {
+  const sourcePath = "scripts/toolchains/astro-stable-config/stable4/SOURCE.json";
+  const source = readFileSync(repoPath(sourcePath), "utf8");
+
+  test("versioned pnpm patch paths are filenames in their actual consumers", () => {
+    for (const file of [
+      "docs-site/package.json",
+      "scripts/toolchains/astro-stable-config/README.md",
+      "scripts/toolchains/astro-stable-config/patch-contract.mjs",
+      "scripts/toolchains/astro-stable-config/inert/tsconfck/SOURCE.json",
+      "tests/ci-workflows/starlight-yaml5.test.ts",
+    ]) {
+      expect(scanText(file, readFileSync(repoPath(file), "utf8"))
+        .filter(finding => finding.kind === "email")).toEqual([]);
+    }
+  });
+
+  test("a patch suffix or directory does not exempt an actual contact", () => {
+    for (const token of [
+      mailbox("support", "company.patch"),
+      "patches/" + mailbox("support", "company.com"),
+      "Contact <" + mailbox("support", "1.2.3.patch") + ">",
+    ]) {
+      expect(scanText("docs/example.md", token).some(finding => finding.kind === "email")).toBe(true);
+    }
+    expect(scanText("docs/example.md", "patches/get-tsconfig@4.14.3.patch " + mailbox("support", "company.com"))
+      .filter(finding => finding.kind === "email")).toHaveLength(1);
+  });
+
+  test("complete relative patch tokens support encoded and ordinary scopes", () => {
+    for (const name of ["package", "@scope%2Fpackage", "@scope/package"]) {
+      const token = "./docs/patches/" + mailbox(name, "1.2.3.patch");
+      for (const line of ["`" + token + "`", token + ", covering generated files", token + "; reviewed"]) {
+        expect(scanText("docs/example.md", line).filter(finding => finding.kind === "email")).toEqual([]);
+      }
+    }
+    const scopedBasename = "@scope%2F" + mailbox("package", "1.2.3.patch");
+    expect(scanText("tests/example.ts", "\"" + scopedBasename + "\"")
+      .filter(finding => finding.kind === "email")).toEqual([]);
+    expect(scanText("src/example.ts", mailbox("scope%2Fpackage", "1.2.3.patch"))
+      .some(finding => finding.kind === "email")).toBe(true);
+  });
+
+  test("path recognition rejects suffixes, malformed versions and URL contexts", () => {
+    const basename = mailbox("package", "1.2.3.patch");
+    const patch = "patches/" + basename;
+    for (const token of [
+      patch + "/",
+      patch + "?download=1",
+      patch + ".extra",
+      "https://company.com/" + patch,
+      "https://" + mailbox("user", "company.com") + "/" + patch,
+      "patches/" + mailbox("package", "1.2.patch"),
+      "patches/" + mailbox("package", "01.2.3.patch"),
+    ]) {
+      expect(scanText("docs/example.md", token).some(finding => finding.kind === "email")).toBe(true);
+    }
+    const findings = scanText("docs/example.md", patch + " Contact <" + basename + ">")
+      .filter(finding => finding.kind === "email");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.value).toBe(basename);
+  });
+
+  test("the exact immutable upstream record retains public attribution", () => {
+    expect(scanText(sourcePath, source).filter(finding => finding.kind === "email")).toEqual([]);
+  });
+
+  test("URL punctuation cannot introduce an exempt relative path or basename", () => {
+    for (const separator of [";", ","]) {
+      const basename = mailbox("package", "1.2.3.patch");
+      for (const suffix of ["patches/" + basename, "@scope%2F" + basename]) {
+        const expected = suffix.startsWith("@") ? "scope%2F" + basename : basename;
+        const findings = scanText("docs/example.md", "https://company.com/x" + separator + suffix);
+        expect(findings.some(finding => finding.kind === "email" && finding.value === expected)).toBe(true);
+      }
+    }
+  });
+
+  test("the stable patch rule does not admit prerelease version tokens", () => {
+    for (const version of ["1.2.3-beta..1.patch", "1.2.3-01.patch", "1.2.3-beta.1.patch"]) {
+      const token = mailbox("package", version);
+      expect(scanText("docs/example.md", "patches/" + token)
+        .some(finding => finding.kind === "email" && finding.value === token)).toBe(true);
+    }
+  });
+
+  test("parentheses preserve surrounding URL context", () => {
+    const basename = mailbox("package", "1.2.3.patch");
+    for (const suffix of ["patches/" + basename, "@scope%2F" + basename]) {
+      const expected = suffix.startsWith("@") ? "scope%2F" + basename : basename;
+      const url = "https://company.com/(" + suffix + ")";
+      expect(scanText("docs/example.md", url)
+        .some(finding => finding.kind === "email" && finding.value === expected)).toBe(true);
+    }
+    expect(scanText("docs/example.md", "(patches/" + basename + ")")
+      .filter(finding => finding.kind === "email")).toEqual([]);
+  });
+
+  test("apostrophes inside URLs are not single-quote path wrappers", () => {
+    const basename = mailbox("package", "1.2.3.patch");
+    for (const suffix of ["patches/" + basename, "@scope%2F" + basename]) {
+      const expected = suffix.startsWith("@") ? "scope%2F" + basename : basename;
+      const url = "https://company.com/x'" + suffix;
+      expect(scanText("docs/example.md", url)
+        .some(finding => finding.kind === "email" && finding.value === expected)).toBe(true);
+      expect(scanText("docs/example.md", "'" + suffix + "'")
+        .filter(finding => finding.kind === "email")).toEqual([]);
+    }
+  });
+
+  test("upstream attribution is not a global address or filename exemption", () => {
+    const email = JSON.parse(source).packages["get-tsconfig"].manifest.value.author.email as string;
+    expect(scanText("src/example.ts", email).some(finding => finding.kind === "email")).toBe(true);
+    expect(scanText("scripts/toolchains/another/SOURCE.json", source)
+      .some(finding => finding.kind === "email")).toBe(true);
+    expect(scanText(sourcePath, source + "\n").some(finding => finding.kind === "email")).toBe(true);
+    const injected = mailbox("private", "company.com");
+    expect(scanText(sourcePath, source + "\n" + injected)
+      .some(finding => finding.kind === "email" && finding.value === injected)).toBe(true);
+  });
+
+  test("the upstream path cannot hide credentials or new private metadata", () => {
+    const changed = JSON.parse(source);
+    const injected = mailbox("private", "company.com");
+    changed.privateContact = injected;
+    changed.packages["get-tsconfig"].manifest.value.author.email = injected;
+    expect(scanText(sourcePath, JSON.stringify(changed))
+      .some(finding => finding.kind === "email" && finding.value === injected)).toBe(true);
+    for (const [kind, payload] of [
+      ["bearer-token", "Bearer " + "c".repeat(32)],
+      ["token-looking", "s" + "k-" + "q".repeat(24)],
+      ["home-path", ["", "Users", "private-user", "config"].join("/")],
+      ["ssh-endpoint", "Host office\n  HostName " + ["prod", "company", "com"].join(".")],
+    ]) {
+      expect(scanText(sourcePath, source + "\n" + payload).some(finding => finding.kind === kind)).toBe(true);
     }
   });
 });

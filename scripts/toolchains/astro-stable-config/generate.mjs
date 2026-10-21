@@ -1,9 +1,9 @@
 // Source-local provider preparation. No install, lock rewrite or approval claim.
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { bundle, confinedPath, loadInputs, preparationError, put, read, repo, reportPreparationError, runtime, sha256, sourceRoot, sourceState, stageInputs, typeDeclarations } from './build.mjs';
+import { bundle, confinedPath, loadInputs, ownedTemporaryDirectory, preparationError, put, read, repo, reportPreparationError, runtime, sha256, sourceRoot, sourceState, stageInputs, typeDeclarations } from './build.mjs';
 
 export { loadInputs, sha256, sourceRoot } from './build.mjs';
 import { applyPatch, bindManifest, filePatch, patchRelative } from './patch-contract.mjs';
@@ -15,8 +15,8 @@ export async function buildPatches(pkg) {
   const receipt = loadInputs();
   const before = sourceState(receipt);
   if (pkg.catalog?.['get-tsconfig'] !== '4.14.3' || pkg.catalog?.astro !== '7.4.1' || pkg.dependencies?.astro !== 'catalog:') throw preparationError('Unexpected owning catalog consumer/provider pair');
-  const temporaryRoot = realpathSync(tmpdir());
-  const stage = mkdtempSync(join(temporaryRoot, 'ocx-stable4-'));
+  const temporary = ownedTemporaryDirectory(tmpdir(), 'ocx-stable4-');
+  const stage = temporary.path;
   try {
     const { qualifyBuild } = await import('./acceptance.mjs');
     const passes = [];
@@ -51,8 +51,7 @@ export async function buildPatches(pkg) {
     if (sourceState(loadInputs()) !== before) throw preparationError('Canonical source changed during generation');
     return { receipt, patch, outputs, cases };
   } finally {
-    if (dirname(stage) !== temporaryRoot || !stage.startsWith(join(temporaryRoot, 'ocx-stable4-'))) throw preparationError('Temporary directory ownership changed');
-    rmSync(stage, { recursive: true, force: true });
+    temporary.remove();
   }
 }
 

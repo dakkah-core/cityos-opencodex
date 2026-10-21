@@ -1,9 +1,9 @@
 // Canonical inputs and isolated generation support. No compiler API is loaded.
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { builtinModules, createRequire } from 'node:module';
-import { dirname, isAbsolute, join, parse, posix, relative, resolve, sep, win32 } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, posix, relative, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const sourceRoot = dirname(fileURLToPath(import.meta.url));
@@ -95,6 +95,32 @@ export function put(root, file, value) {
     }
   }
   return target;
+}
+
+// Ownership includes filesystem identity, not merely a unique pathname. An
+// awaited producer must never recursively remove a replacement at that path.
+export function ownedTemporaryDirectory(parent, prefix) {
+  canonicalRelativePath(prefix);
+  if (prefix.includes('/')) throw preparationError('Temporary prefix must be one path component');
+  const base = realpathSync(parent);
+  const parentIdentity = lstatSync(base, { bigint: true });
+  const root = mkdtempSync(confinedPath(base, prefix));
+  const identity = lstatSync(root, { bigint: true });
+  return Object.freeze({
+    path: root,
+    remove() {
+      confinedPath(base, basename(root));
+      const currentParent = lstatSync(base, { bigint: true });
+      const current = lstatSync(root, { bigint: true });
+      if (!current.isDirectory() || current.isSymbolicLink() ||
+          current.dev !== identity.dev || current.ino !== identity.ino ||
+          currentParent.dev !== parentIdentity.dev || currentParent.ino !== parentIdentity.ino ||
+          dirname(root) !== base || realpathSync(root) !== root) {
+        throw preparationError('Temporary directory ownership changed; cleanup refused');
+      }
+      rmSync(root, { recursive: true, force: true });
+    },
+  });
 }
 
 function packageIdentity(key, entry) {

@@ -1,11 +1,11 @@
 // Behavioral fixtures for the parent's serial lane; no installed modules edited.
 import assert from 'node:assert/strict';
 import Module, { createRequire } from 'node:module';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { canonicalRelativePath, command, confinedPath, json, loadInputs, put, read, repo, reportPreparationError, sha256, sourceRoot, stageInputs } from './build.mjs';
+import { canonicalRelativePath, command, confinedPath, json, loadInputs, ownedTemporaryDirectory, put, read, repo, reportPreparationError, sha256, sourceRoot, stageInputs } from './build.mjs';
 import { applyPatch, bindManifest, filePatch, patchRelative } from './patch-contract.mjs';
 
 const slash = value => value.replaceAll('\\', '/');
@@ -14,13 +14,9 @@ export const sourceCases = ['stable-parity', 'errors-and-cache', 'exact-sources'
 export const installedCases = ['watch-and-alias', 'raw-and-errors', 'jsconfig-and-metadata', 'no-compiler-binding'];
 
 async function fixture(run) {
-  const temporaryRoot = realpathSync(tmpdir());
-  const root = mkdtempSync(join(temporaryRoot, 'ocx-config-contract-'));
-  try { return await run(root); }
-  finally {
-    if (dirname(root) !== temporaryRoot || !root.startsWith(join(temporaryRoot, 'ocx-config-contract-'))) throw new Error('Fixture ownership changed');
-    rmSync(root, { recursive: true, force: true });
-  }
+  const temporary = ownedTemporaryDirectory(tmpdir(), 'ocx-config-contract-');
+  try { return await run(temporary.path); }
+  finally { temporary.remove(); }
 }
 
 // Symbols are provider-local. Preserve their descriptions/values and undefined
@@ -363,9 +359,36 @@ export async function installedContract(name) {
 
 // Lowest-layer security regressions use only isolated fixtures and injected
 // process results. They never execute a child, compiler, generator or Git.
-export const securityCases = ['canonical-inputs', 'receipt-confinement', 'link-confinement', 'command-diagnostics'];
+export const securityCases = ['canonical-inputs', 'receipt-confinement', 'link-confinement', 'cleanup-ownership', 'command-diagnostics'];
 
 export async function securityContract(name) {
+  if (name === 'cleanup-ownership') {
+    await fixture(async outer => {
+      const original = ownedTemporaryDirectory(outer, 'original-');
+      const foreign = ownedTemporaryDirectory(outer, 'foreign-');
+      const parked = join(outer, 'parked-original');
+      put(original.path, 'owned.txt', 'OWNED_DIRECTORY_SENTINEL\n');
+      put(foreign.path, 'foreign.txt', 'FOREIGN_DIRECTORY_SENTINEL\n');
+      renameSync(original.path, parked);
+      renameSync(foreign.path, original.path);
+      try {
+        // Match the generator's awaited-work boundary before cleanup.
+        await Promise.resolve();
+        assert.throws(() => original.remove(), /ownership changed.*refused/);
+        assert.equal(read(join(original.path, 'foreign.txt')), 'FOREIGN_DIRECTORY_SENTINEL\n');
+        assert.equal(read(join(parked, 'owned.txt')), 'OWNED_DIRECTORY_SENTINEL\n');
+      } finally {
+        // Restore both identities before asking their own cleaners to remove.
+        renameSync(original.path, foreign.path);
+        renameSync(parked, original.path);
+        foreign.remove();
+        original.remove();
+      }
+      assert.equal(existsSync(original.path), false);
+      assert.equal(existsSync(foreign.path), false);
+    });
+    return;
+  }
   if (name === 'canonical-inputs') {
     const receipt = loadInputs();
     assert.equal(Object.keys(receipt.inputSha256).length, 305);

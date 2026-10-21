@@ -1,10 +1,4 @@
 {
-  "name": "gui",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "engines": { "node": ">=26.0.0 <27.0.0" },
-  "workspaces": { "packages": [] },
   "catalog": {
     "@tanstack/react-virtual": "3.14.21",
     "react": "19.3.1",
@@ -26,21 +20,9 @@
     "postcss": "8.5.31"
   },
   "catalogs": {
-    "third-party-api": { "typescript": "npm:@typescript/typescript6@6.0.2" }
-  },
-  "scripts": {
-    "dev": "vite",
-    "typecheck": "tsc -b",
-    "build": "bun run typecheck && vite build",
-    "lint": "oxlint .",
-    "test": "bun ../scripts/test-with-pinned-bun.ts --isolate tests",
-    "lint:i18n": "oxlint src/pages src/components src/App.tsx src/main.tsx src/ui.tsx src/provider-workspace-data.ts",
-    "doctor": "react-doctor --verbose --scope changed --base origin/main --no-telemetry",
-    "doctor:full": "react-doctor --verbose --scope full --no-telemetry",
-    "preview": "vite preview",
-    "test:sidebar-version": "bun tests/sidebar-version-browser.ts",
-    "test:quota-hover": "bun tests/quota-summary-hover-browser.ts",
-    "test:shared-scroll": "bun tests/shared-scroll-browser.ts"
+    "third-party-api": {
+      "typescript": "npm:@typescript/typescript6@6.0.2"
+    }
   },
   "dependencies": {
     "@tanstack/react-virtual": "catalog:",
@@ -55,15 +37,46 @@
     "@vitejs/plugin-react": "catalog:",
     "happy-dom": "catalog:",
     "oxlint": "catalog:",
+    "react-doctor": "catalog:",
     "react-refresh": "catalog:",
     "typescript": "catalog:",
-    "vite": "catalog:",
-    "react-doctor": "catalog:"
+    "vite": "catalog:"
   },
+  "engines": {
+    "node": ">=26.0.0 <27.0.0"
+  },
+  "name": "gui",
   "overrides": {
     "brace-expansion": "catalog:",
-    "ajv@^8": { "fast-uri": "catalog:" },
-    "postcss": { ".": "catalog:", "nanoid": "catalog:" },
-    "react-doctor": { "typescript": "catalog:third-party-api" }
+    "ajv@^8": {
+      "fast-uri": "catalog:"
+    },
+    "postcss": {
+      ".": "catalog:",
+      "nanoid": "catalog:"
+    },
+    "react-doctor": {
+      "typescript": "catalog:third-party-api"
+    }
+  },
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc -b",
+    "build": "bun run typecheck && vite build",
+    "lint": "oxlint .",
+    "test": "bun ../scripts/test-with-pinned-bun.ts --isolate tests",
+    "lint:i18n": "oxlint src/pages src/components src/App.tsx src/main.tsx src/ui.tsx src/provider-workspace-data.ts",
+    "doctor": "react-doctor --verbose --scope changed --base origin/main --no-telemetry",
+    "doctor:full": "react-doctor --verbose --scope full --no-telemetry",
+    "preview": "vite preview",
+    "test:sidebar-version": "bun tests/sidebar-version-browser.ts",
+    "test:quota-hover": "bun tests/quota-summary-hover-browser.ts",
+    "test:shared-scroll": "bun tests/shared-scroll-browser.ts"
+  },
+  "type": "module",
+  "version": "0.0.0",
+  "workspaces": {
+    "packages": []
   }
 }

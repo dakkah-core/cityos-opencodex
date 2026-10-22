@@ -773,6 +773,8 @@ jobs:
       - name: Verify declared upstream modifications
         run: |
           node --test scripts/upstream/integration.test.mjs
+          node --test extensions/cityos-engine/host-contract.test.ts
+          node node_modules/typescript/bin/tsc --project extensions/cityos-engine/tsconfig.json
           node scripts/upstream/integration.mjs
 
       - name: Setup project Bun

@@ -5,8 +5,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { canonicalRelativePath, command, confinedPath, json, loadInputs, ownedTemporaryDirectory, put, read, repo, reportPreparationError, sha256, sourceRoot, stageInputs } from './build.mjs';
-import { applyPatch, bindManifest, filePatch, patchRelative } from './patch-contract.mjs';
+import { canonicalRelativePath, command, confinedPath, consumerArchiveMembers, consumerCatalog, consumerMembers, consumerPackageMetadata, consumerVersion, json, loadConsumerInputs, loadInputs, ownedTemporaryDirectory, put, read, repo, reportPreparationError, rolldownCatalog, sha256, sourceRoot, stageInputs, verifyConsumerArchive } from './build.mjs';
+import { applyPatch, bindConsumerManifest, bindManifest, filePatch, patchRelative, prepareConsumerManifest } from './patch-contract.mjs';
 
 const slash = value => value.replaceAll('\\', '/');
 const stableNames = ['createFilesMatcher', 'createPathsMatcher', 'findTsconfig', 'getTsconfig', 'parseTsconfig'];
@@ -255,6 +255,7 @@ function packageIdentity(entry) {
 
 async function installedConsumer() {
   const receipt = loadInputs();
+  const consumer = loadConsumerInputs();
   const docs = json(join(repo, 'docs-site/package.json'));
   const patch = read(join(repo, 'docs-site', patchRelative));
   const expected = await prepareSource();
@@ -262,10 +263,12 @@ async function installedConsumer() {
   assert.deepEqual(bindManifest(docs, patch), docs, 'Generate and bind the real provider patch before installed acceptance');
   const owner = createRequire(join(repo, 'docs-site/package.json'));
   const astro = owner.resolve('astro/package.json');
-  assert.equal(json(astro).version, '7.4.1');
+  assert.equal(json(astro).version, consumerVersion);
+  assert.equal(read(astro), consumer.inputs['package/package.json'], 'Preserve the exact public Astro package metadata');
+  assert.equal(read(join(dirname(astro), 'LICENSE')), consumer.inputs['package/LICENSE'], 'Preserve the public consumer license');
   const entry = join(dirname(astro), 'dist/core/config/tsconfig.js');
-  assert.equal(read(entry), read(join(sourceRoot, 'upstream/astro/tsconfig.published.js')), 'Preserve original Astro runtime consumer');
-  assert.equal(read(join(dirname(entry), 'tsconfig.d.ts')), read(join(sourceRoot, 'upstream/astro/tsconfig.published.d.ts')), 'Preserve original Astro declarations');
+  assert.equal(read(entry), consumer.inputs['package/dist/core/config/tsconfig.js'], 'Preserve the exact public Astro 7.4.2 runtime consumer');
+  assert.equal(read(join(dirname(entry), 'tsconfig.d.ts')), consumer.inputs['package/dist/core/config/tsconfig.d.ts'], 'Preserve the exact public Astro 7.4.2 declarations');
   if (!globalThis.Bun?.resolveSync) throw new Error('Run installed contracts through owning Bun test runner');
   const providerEntry = Bun.resolveSync('get-tsconfig', dirname(entry));
   const { directory, manifest } = packageIdentity(providerEntry);
@@ -280,7 +283,9 @@ async function installedConsumer() {
   const common = createRequire(entry)('get-tsconfig');
   assert.equal(typeof provider.readTsconfig, 'function');
   assert.equal(typeof common.readTsconfig, 'function');
-  return { load: (await import(pathToFileURL(entry).href)).loadTSConfig, provider, common, providerEntry, astro };
+  const { loadTSConfig } = await import(pathToFileURL(entry).href);
+  assert.equal(typeof loadTSConfig, 'function', 'Qualify the actual public consumer API');
+  return { load: loadTSConfig, provider, common, providerEntry, astro };
 }
 
 export async function installedContract(name) {
@@ -359,9 +364,120 @@ export async function installedContract(name) {
 
 // Lowest-layer security regressions use only isolated fixtures and injected
 // process results. They never execute a child, compiler, generator or Git.
-export const securityCases = ['canonical-inputs', 'receipt-confinement', 'link-confinement', 'cleanup-ownership', 'command-diagnostics'];
+export const securityCases = ['canonical-inputs', 'receipt-confinement', 'link-confinement', 'cleanup-ownership', 'command-diagnostics', 'consumer-parent-binding', 'consumer-public-inputs', 'consumer-rolldown-catalog'];
 
 export async function securityContract(name) {
+  if (name === 'consumer-parent-binding') {
+    const docs = {
+      catalog: { astro: '7.4.2', 'get-tsconfig': '4.14.3', rolldown: '1.2.15' },
+      dependencies: { astro: 'catalog:' }, devDependencies: { rolldown: 'catalog:' },
+      overrides: {
+        'astro@7.4.1': { 'get-tsconfig': 'catalog:' },
+        postcss: { '.': 'catalog:', nanoid: 'catalog:' },
+        'astro@7.4.2': { svgo: 'catalog:' },
+      },
+      patchedDependencies: { '@fixture/other@1.0.0': 'patches/other.patch' },
+    };
+    const original = structuredClone(docs);
+    const previousParent = structuredClone(docs);
+    previousParent.catalog.astro = '7.4.1';
+    const unchanged = JSON.stringify(previousParent);
+    const staged = prepareConsumerManifest(previousParent);
+    assert.equal(staged.catalog.astro, '7.4.2');
+    assert.equal(JSON.stringify(previousParent), unchanged, 'Staging cannot publish or mutate the active parent');
+    assert.deepEqual(staged.overrides, previousParent.overrides, 'Catalog and binding are published together after generation');
+    for (const mutate of [
+      pkg => { delete pkg.overrides['astro@7.4.1']; },
+      pkg => { pkg.catalog.astro = '7.4.0'; },
+      pkg => { pkg.catalog.astro = '7.4.2-beta.1'; },
+    ]) {
+      const candidate = structuredClone(previousParent);
+      mutate(candidate);
+      assert.throws(() => prepareConsumerManifest(candidate));
+    }
+    const bound = bindConsumerManifest(docs);
+    assert.deepEqual(docs, original, 'Binding must not mutate caller-owned metadata');
+    assert.equal(bound.overrides['astro@7.4.1'], undefined);
+    assert.deepEqual(bound.overrides['astro@7.4.2'], { svgo: 'catalog:', 'get-tsconfig': 'catalog:' });
+    assert.deepEqual(bound.overrides.postcss, original.overrides.postcss);
+    assert.equal(bound.patchedDependencies['@fixture/other@1.0.0'], 'patches/other.patch');
+    assert.equal(bound.patchedDependencies['get-tsconfig@4.14.3'], patchRelative);
+    assert.deepEqual(bindConsumerManifest(bound), bound, 'Final generator binding is idempotent');
+    const fresh = structuredClone(docs);
+    delete fresh.overrides['astro@7.4.1'];
+    assert.deepEqual(bindConsumerManifest(fresh), bound);
+    const rejected = (mutate, expression) => {
+      const candidate = structuredClone(docs);
+      mutate(candidate);
+      const snapshot = structuredClone(candidate);
+      assert.throws(() => bindConsumerManifest(candidate), expression);
+      assert.deepEqual(candidate, snapshot, 'Rejected binding must preserve all input rules');
+    };
+    rejected(pkg => { pkg.catalog.astro = '7.4.1'; }, /owning Astro/);
+    rejected(pkg => { pkg.catalog.astro = '^7.4.2'; }, /owning Astro/);
+    rejected(pkg => { pkg.catalog['get-tsconfig'] = '5.0.0-beta.6'; }, /owning Astro/);
+    rejected(pkg => { pkg.dependencies.astro = '7.4.2'; }, /owning Astro/);
+    rejected(pkg => { pkg.overrides['astro@7.4.1'].svgo = 'catalog:'; }, /prior Astro/);
+    rejected(pkg => { pkg.overrides['astro@7.4.1']['get-tsconfig'] = '5.0.0-beta.6'; }, /prior Astro/);
+    rejected(pkg => { pkg.overrides['astro@7.4.2'] = 'catalog:'; }, /exact Astro/);
+    rejected(pkg => { pkg.overrides['astro@7.4.2']['get-tsconfig'] = '5.0.0-beta.6'; }, /stable provider/);
+    rejected(pkg => { pkg.patchedDependencies['get-tsconfig@4.14.3'] = 'foreign.patch'; }, /provider patch/);
+    for (const selector of ['astro@7.4.1', 'astro@7.4.2', 'tsconfck@3.1.6']) {
+      rejected(pkg => { pkg.patchedDependencies[selector] = 'retired.patch'; }, /remain inactive/);
+    }
+    for (const selector of ['tsconfck', 'tsconfck@3.1.6']) {
+      rejected(pkg => { pkg.overrides[selector] = 'catalog:'; }, /remain inactive/);
+    }
+    return;
+  }
+  if (name === 'consumer-public-inputs') {
+    consumerArchiveMembers([...consumerMembers, 'package/other-public-file.js']);
+    for (const members of [undefined, [], consumerMembers.slice(1), [...consumerMembers, consumerMembers[0]], [...consumerMembers, 42]]) {
+      assert.throws(() => consumerArchiveMembers(members), /missing or duplicated/);
+    }
+    // Metadata fixtures describe observed registry identity, not an invented
+    // consumer API or a replacement for the actual installed contracts.
+    const original = { name: 'astro', version: '7.4.2', type: 'module', dependencies: { 'get-tsconfig': '5.0.0-beta.6' } };
+    assert.equal(consumerPackageMetadata(original), original);
+    for (const mutate of [
+      pkg => { pkg.name = 'other'; }, pkg => { pkg.version = '7.4.1'; },
+      pkg => { pkg.type = 'commonjs'; }, pkg => { pkg.dependencies['get-tsconfig'] = '4.14.3'; },
+    ]) {
+      const candidate = structuredClone(original);
+      mutate(candidate);
+      assert.throws(() => consumerPackageMetadata(candidate), /public Astro/);
+    }
+    for (const bytes of [undefined, '', Buffer.alloc(0), Buffer.from('PRIVATE_ARCHIVE_SENTINEL'), Buffer.alloc(8 * 1024 * 1024 + 1)]) {
+      let failure;
+      assert.throws(() => verifyConsumerArchive(bytes), error => { failure = error; return true; });
+      const messages = [];
+      reportPreparationError(failure, message => messages.push(message));
+      assert.equal(messages.length, 1);
+      assert.match(messages[0], /integrity-verified public Astro 7\.4\.2/);
+      assert.doesNotMatch(messages[0], /PRIVATE_ARCHIVE_SENTINEL/);
+    }
+    // Missing archive must fail before staging; valid-archive extraction and
+    // the new consumer API remain real-input gates for the serial controller.
+    return;
+  }
+  if (name === 'consumer-rolldown-catalog') {
+    const pkg = { catalog: { astro: '7.4.2', 'get-tsconfig': '4.14.3', rolldown: '1.2.15' }, dependencies: { astro: 'catalog:' }, devDependencies: { rolldown: 'catalog:' } };
+    consumerCatalog(pkg);
+    rolldownCatalog(pkg, { name: 'rolldown', version: '1.2.15' });
+    for (const tool of [{ name: 'rolldown', version: '1.2.14' }, { name: 'other', version: '1.2.15' }]) {
+      assert.throws(() => rolldownCatalog(pkg, tool), /owning catalog Rolldown/);
+    }
+    for (const mutate of [
+      candidate => { candidate.catalog.rolldown = '1.2.14'; },
+      candidate => { candidate.catalog.rolldown = '^1.2.15'; },
+      candidate => { candidate.devDependencies.rolldown = '1.2.15'; },
+    ]) {
+      const candidate = structuredClone(pkg);
+      mutate(candidate);
+      assert.throws(() => rolldownCatalog(candidate, { name: 'rolldown', version: '1.2.15' }), /owning Astro/);
+    }
+    return;
+  }
   if (name === 'cleanup-ownership') {
     await fixture(async outer => {
       const original = ownedTemporaryDirectory(outer, 'original-');

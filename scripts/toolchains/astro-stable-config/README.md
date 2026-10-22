@@ -6,7 +6,7 @@ Production override/patch registration is NOT APPLIED.
 ## Active source
 
 - Owning manifest: docs-site/package.json. Catalog get-tsconfig=4.14.3;
-  catalog Rolldown=1.2.14 is the only added generator dependency.
+  catalog Rolldown=1.2.15 is the only added generator dependency.
 - SOURCE.json routes to stable4/SOURCE.json, the immutable complete source,
   registry integrity, Git tree/gitHead, license, helper and original-consumer
   inventory. There are no retained active package.json workspaces.
@@ -45,7 +45,20 @@ types-only/tsconfig-field fallbacks retain their existing treatment. Native
 Node package resolution retains Node's own package-cache semantics. The old
 parseTsconfig API does not acquire that process-wide cache.
 
-The original Astro 7.4.1 source, installed JS and declarations are not rewritten.
+The original Astro 7.4.1 source and historical receipts remain immutable.
+Current installed comparison uses the public Astro 7.4.2 archive retained at
+upstream/astro-7.4.2.tgz, verified against its exact registry SHA512 before
+reading package metadata, license, runtime consumer and declarations to memory.
+The archive is a required source input, covered by the generation fence.
+The standard tar executable must support listing and named-member reads;
+generation never extracts or installs an upstream package workspace.
+The new public consumer source and API must be inspected and qualified in the
+parent serial lane before adopting this update; version metadata alone is
+insufficient. Installed JS and declarations are never rewritten.
+The generator stages the exact 7.4.1 to 7.4.2 parent catalog transition in
+memory. Its final atomic manifest write publishes the new catalog selection
+and exact stable provider override together, after every generation check.
+An unsuccessful generation leaves the previous parent and binding intact.
 Its root-only tsconfig/jsconfig choice, strict raw JSONC validation, error
 envelope, rawConfig round-trip and sources-to-watchFiles path remain intact.
 No new TS5 or TS6 binding, peer relaxation, prerelease relabel or exception is
@@ -72,7 +85,9 @@ are immutable metadata, never installable manifests.
 3. Success emits ONLY docs-site/patches/get-tsconfig@4.14.3.patch, covering
    dist/index.mjs, dist/index.cjs, dist/index.d.mts and dist/index.d.cts.
    Only then the generator registers patchedDependencies get-tsconfig@4.14.3
-   and overrides["astro@7.4.1"]["get-tsconfig"]="catalog:" in the docs owner.
+   and overrides["astro@7.4.2"]["get-tsconfig"]="catalog:" in the docs owner.
+   It retires only the sole owned get-tsconfig entry under astro@7.4.1;
+   a prior-parent row containing unrelated rules fails without discarding them.
    There is no Astro patch or npm package alias. No lock metadata is emitted.
 4. Run the normal docs-domain Bun 1.4.3 install in the parent's serial lane.
    Bun's actual exact-parent catalog override plus patch application is an
@@ -117,3 +132,5 @@ source/astro/, source/tsconfck/ and upstream/tsconfck/ remain inert historical
 inputs. They are not imported by the active generator or tests. The original
 upstream/astro/ published consumer/license inputs remain immutable comparison
 evidence. No deprecated tsconfck production alias or patch is activated.
+All historical SOURCE.json records, including stable4/SOURCE.json and its
+recorded Astro 7.4.1/Rolldown 1.2.14 provenance, retain their exact bytes.

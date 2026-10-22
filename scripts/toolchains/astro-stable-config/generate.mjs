@@ -3,18 +3,19 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { bundle, confinedPath, loadInputs, ownedTemporaryDirectory, preparationError, put, read, repo, reportPreparationError, runtime, sha256, sourceRoot, sourceState, stageInputs, typeDeclarations } from './build.mjs';
+import { bundle, confinedPath, consumerCatalog, loadConsumerInputs, loadInputs, ownedTemporaryDirectory, preparationError, put, read, repo, reportPreparationError, runtime, sha256, sourceRoot, sourceState, stageInputs, typeDeclarations } from './build.mjs';
 
 export { loadInputs, sha256, sourceRoot } from './build.mjs';
-import { applyPatch, bindManifest, filePatch, patchRelative } from './patch-contract.mjs';
+import { applyPatch, bindManifest, filePatch, patchRelative, prepareConsumerManifest } from './patch-contract.mjs';
 export { bindManifest, filePatch, patchRelative } from './patch-contract.mjs';
 const manifestPath = join(repo, 'docs-site/package.json');
 
 export async function buildPatches(pkg) {
   runtime();
+  consumerCatalog(pkg);
+  loadConsumerInputs();
   const receipt = loadInputs();
   const before = sourceState(receipt);
-  if (pkg.catalog?.['get-tsconfig'] !== '4.14.3' || pkg.catalog?.astro !== '7.4.1' || pkg.dependencies?.astro !== 'catalog:') throw preparationError('Unexpected owning catalog consumer/provider pair');
   const temporary = ownedTemporaryDirectory(tmpdir(), 'ocx-stable4-');
   const stage = temporary.path;
   try {
@@ -60,7 +61,8 @@ export async function generate(mode) {
   runtime();
   confinedPath(repo, 'docs-site/package.json');
   const before = read(manifestPath);
-  const pkg = JSON.parse(before);
+  const original = JSON.parse(before);
+  const pkg = mode === '--check' ? original : prepareConsumerManifest(original);
   const { patch, cases, outputs } = await buildPatches(pkg);
   if (read(manifestPath) !== before) throw preparationError('Docs manifest changed during preparation');
   if (mode === '--verify-source') return { cases, patchSha256: sha256(patch), outputSha256: Object.fromEntries(Object.entries(outputs).map(([file, value]) => [file, sha256(value)])), emitted: false, bound: false };

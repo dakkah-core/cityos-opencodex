@@ -13,6 +13,68 @@ export const read = path => readFileSync(path, 'utf8');
 export const json = path => JSON.parse(read(path));
 export const sha256 = value => createHash('sha256').update(value).digest('hex');
 
+// Current public consumer input. Historical SOURCE.json receipts stay intact.
+// The serial controller must acquire this exact archive before generation.
+export const consumerVersion = '7.4.2';
+export const consumerArchiveRelative = 'upstream/astro-7.4.2.tgz';
+const consumerIntegrity = 'FAH4cdDlFaVnQGjazLTEIC5vJqGlo5XANc1wIbzQHIqAjJTll/RWTUs+SPNW1JdezG4YGxMZllaE5A41T2kzhA==';
+export const consumerMembers = Object.freeze([
+  'package/package.json', 'package/LICENSE',
+  'package/dist/core/config/tsconfig.js', 'package/dist/core/config/tsconfig.d.ts',
+]);
+
+export function consumerCatalog(pkg) {
+  if (pkg?.catalog?.['get-tsconfig'] !== '4.14.3' || pkg.catalog.astro !== consumerVersion ||
+      pkg.dependencies?.astro !== 'catalog:' || pkg.catalog.rolldown !== '1.2.15' ||
+      pkg.devDependencies?.rolldown !== 'catalog:') {
+    throw preparationError('Expected owning Astro 7.4.2, stable provider 4.14.3 and Rolldown 1.2.15 catalogs');
+  }
+}
+
+export function rolldownCatalog(pkg, tool) {
+  consumerCatalog(pkg);
+  if (tool?.name !== 'rolldown' || tool.version !== pkg.catalog.rolldown) {
+    throw preparationError('Install the owning catalog Rolldown 1.2.15 before generation');
+  }
+}
+
+export function verifyConsumerArchive(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > 8 * 1024 * 1024 ||
+      createHash('sha512').update(bytes).digest('base64') !== consumerIntegrity) {
+    throw preparationError('Acquire the exact integrity-verified public Astro 7.4.2 archive before generation');
+  }
+}
+
+export function consumerPackageMetadata(manifest) {
+  if (manifest?.name !== 'astro' || manifest.version !== consumerVersion || manifest.type !== 'module' ||
+      manifest.dependencies?.['get-tsconfig'] !== '5.0.0-beta.6') {
+    throw preparationError('Unexpected public Astro 7.4.2 consumer metadata');
+  }
+  return manifest;
+}
+
+export function consumerArchiveMembers(members) {
+  if (!Array.isArray(members) || members.some(member => typeof member !== 'string') ||
+      consumerMembers.some(file => members.filter(member => member === file).length !== 1)) {
+    throw preparationError('Required public Astro consumer archive member is missing or duplicated');
+  }
+}
+
+export function loadConsumerInputs() {
+  const archive = confinedPath(sourceRoot, consumerArchiveRelative);
+  const before = readFileSync(archive);
+  verifyConsumerArchive(before); // Verify public SRI before any archive operation.
+  // Read named members to memory only. Never unpack a registry workspace or
+  // activate its package scripts, dependency declarations or compiler pins.
+  const members = command('tar', ['-tzf', archive], sourceRoot).split(/\r?\n/).filter(Boolean);
+  consumerArchiveMembers(members);
+  const inputs = Object.fromEntries(consumerMembers.map(file =>
+    [file, command('tar', ['-xOzf', archive, file], sourceRoot)]));
+  if (!readFileSync(archive).equals(before)) throw preparationError('Public Astro consumer archive changed during inspection');
+  const manifest = consumerPackageMetadata(JSON.parse(inputs['package/package.json']));
+  return { manifest, inputs };
+}
+
 const publicErrors = new WeakMap();
 const diagnosticCodes = new Set(['ENOENT', 'EACCES', 'EPERM', 'ENOTDIR', 'EISDIR', 'EEXIST', 'EINVAL', 'ELOOP', 'ENOSPC', 'ENAMETOOLONG', 'EROFS', 'ETIMEDOUT', 'ENOBUFS', 'ENOMEM', 'ERR_MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']);
 export function preparationError(message) {
@@ -172,7 +234,7 @@ export function sourceState(receipt) {
   validateReceipt(receipt);
   const owned = ['SOURCE.json', 'stable4/SOURCE.json', 'build.mjs', 'generate.mjs', 'acceptance.mjs', 'patch-contract.mjs',
     'stable4/type-contract.ts', ...overlays.map(file => 'stable4/source/' + file)];
-  const files = [...owned, ...Object.keys(receipt.inputSha256), ...Object.keys(receipt.consumer.inputs)];
+  const files = [...owned, consumerArchiveRelative, ...Object.keys(receipt.inputSha256), ...Object.keys(receipt.consumer.inputs)];
   const canonical = ['config/toolchains/node-typescript.json', 'package.json', 'gui/package.json',
     'docs-site/package.json', 'tests/ci-workflows/toolchain-catalogs.test.ts'];
   const { compiler, cli, nodeTypes } = declarationTools();
@@ -257,7 +319,7 @@ export function stageInputs(stage, receipt, corrected) {
 export async function bundle(stage, pkg, receipt) {
   const owner = createRequire(join(repo, 'docs-site/package.json'));
   const tool = json(owner.resolve('rolldown/package.json'));
-  if (pkg.devDependencies?.rolldown !== 'catalog:' || tool.version !== pkg.catalog.rolldown || tool.version !== '1.2.14') throw preparationError('Install the owning catalog Rolldown 1.2.14 before generation');
+  rolldownCatalog(pkg, tool);
   const { rolldown } = await import(pathToFileURL(owner.resolve('rolldown')).href);
   const helpers = {
     slash: 'slash/index.js',

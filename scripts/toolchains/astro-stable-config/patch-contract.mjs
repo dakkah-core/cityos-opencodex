@@ -1,6 +1,6 @@
 // Shared patch and manifest contracts have no generator CLI side effects.
 import { existsSync } from 'node:fs';
-import { canonicalRelativePath, command, confinedPath, preparationError, read, repo } from './build.mjs';
+import { canonicalRelativePath, command, confinedPath, consumerCatalog, consumerVersion, preparationError, read, repo } from './build.mjs';
 export const patchRelative = 'patches/get-tsconfig@4.14.3.patch';
 export function filePatch(path, original, corrected) {
   canonicalRelativePath(path);
@@ -37,19 +37,56 @@ export function filePatch(path, original, corrected) {
 export function bindManifest(pkg, patch) {
   const output = confinedPath(repo, 'docs-site/' + patchRelative);
   if (!patch || !existsSync(output) || read(output) !== patch) throw preparationError('A real complete generated provider patch must exist before binding');
+  return bindConsumerManifest(pkg);
+}
+
+// Pure manifest rule: tests never write the owner manifest or provider patch.
+export function bindConsumerManifest(pkg) {
   const bound = structuredClone(pkg);
-  if (bound.catalog?.['get-tsconfig'] !== '4.14.3' || bound.catalog?.astro !== '7.4.1' || bound.dependencies?.astro !== 'catalog:') throw preparationError('Unexpected docs catalogs');
+  consumerCatalog(bound);
   bound.overrides ??= {};
-  const existing = bound.overrides['astro@7.4.1'];
+  if (typeof bound.overrides !== 'object' || Array.isArray(bound.overrides)) throw preparationError('Unexpected docs overrides');
+  const parent = 'astro@' + consumerVersion;
+  const previousParent = 'astro@7.4.1';
+  const previousBinding = bound.overrides[previousParent];
+  if (previousBinding !== undefined) {
+    if (typeof previousBinding !== 'object' || !previousBinding || Array.isArray(previousBinding) ||
+        Object.keys(previousBinding).length !== 1 || previousBinding['get-tsconfig'] !== 'catalog:') {
+      throw preparationError('Conflicting prior Astro parent binding; preserve unrelated owner rules');
+    }
+    delete bound.overrides[previousParent];
+  }
+  const existing = bound.overrides[parent];
   if (existing !== undefined && (typeof existing !== 'object' || !existing || Array.isArray(existing))) throw preparationError('Conflicting exact Astro override');
   if (existing?.['get-tsconfig'] !== undefined && existing['get-tsconfig'] !== 'catalog:') throw preparationError('Conflicting stable provider override');
-  bound.overrides['astro@7.4.1'] = { ...existing, 'get-tsconfig': 'catalog:' };
+  bound.overrides[parent] = { ...existing, 'get-tsconfig': 'catalog:' };
   bound.patchedDependencies ??= {};
+  if (typeof bound.patchedDependencies !== 'object' || Array.isArray(bound.patchedDependencies)) throw preparationError('Unexpected docs patch bindings');
   const previous = bound.patchedDependencies['get-tsconfig@4.14.3'];
   if (previous !== undefined && previous !== patchRelative) throw preparationError('Conflicting provider patch');
-  if (bound.overrides.tsconfck || bound.patchedDependencies['tsconfck@3.1.6'] || bound.patchedDependencies['astro@7.4.1']) throw preparationError('The retired consumer/tsconfck proposal must remain inactive');
+  if (Object.keys(bound.overrides).some(key => /^tsconfck(?:@|$)/.test(key)) ||
+      Object.keys(bound.patchedDependencies).some(key => /^(?:astro|tsconfck)(?:@|$)/.test(key))) {
+    throw preparationError('The retired consumer/tsconfck proposal must remain inactive');
+  }
   bound.patchedDependencies['get-tsconfig@4.14.3'] = patchRelative;
   return bound;
+}
+
+// The existing generator stages the one reviewed parent transition in memory.
+// Only its final complete-patch binding publishes the catalog and override.
+export function prepareConsumerManifest(pkg) {
+  const candidate = structuredClone(pkg);
+  if (candidate.catalog?.astro === '7.4.1') {
+    const previous = candidate.overrides?.['astro@7.4.1'];
+    if (!previous || typeof previous !== 'object' || Array.isArray(previous) ||
+        Object.keys(previous).length !== 1 || previous['get-tsconfig'] !== 'catalog:') {
+      throw preparationError('Existing exact owned Astro parent binding required');
+    }
+    candidate.catalog.astro = consumerVersion;
+  }
+  consumerCatalog(candidate);
+  bindConsumerManifest(candidate); // Validate the future binding without writes.
+  return candidate;
 }
 
 export function applyPatch(root, patch, check = false) {

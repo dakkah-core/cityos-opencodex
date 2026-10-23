@@ -426,6 +426,7 @@
       "paths": [
         "CONTRIBUTING.md",
         "README.md",
+        "readme/i18n-manifest.json",
         "docs-site/astro.config.mjs",
         "docs-site/bun.lock",
         "docs-site/package.json",
@@ -452,7 +453,8 @@
       ],
       "tests": [
         "tests/ci-workflows/starlight-yaml5.test.ts",
-        "tests/ci-workflows/toolchain-catalogs.test.ts"
+        "tests/ci-workflows/toolchain-catalogs.test.ts",
+        "tests/ci-workflows/docs-readme-translation-parity.test.ts"
       ]
     },
     {

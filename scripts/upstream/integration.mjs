@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const sha256 = (bytes) =>
@@ -106,8 +106,24 @@ export function captureSourceIdentity(root) {
   const hash = createHash("sha256");
   for (const name of [...new Set(names)].sort()) {
     hash.update(name).update("\0");
-    if (!existsSync(resolve(root, name))) {
+    if (!validPath(name)) throw Error(`Invalid source path: ${name}`);
+    const file = resolve(root, name), entry = lstatSync(file, { throwIfNoEntry: false });
+    if (!entry) {
       hash.update("deleted\0");
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      // Git stores the link text as source. Do not dereference it as artifact
+      // bytes, and do not silently classify a dangling source link as deleted.
+      const target = readlinkSync(file);
+      const targets = [realpathSync(dirname(file)), resolve(dirname(file), target)];
+      if (existsSync(file)) targets.push(realpathSync(file));
+      for (const targetPath of targets) {
+        const within = relative(realpathSync(root), targetPath);
+        if (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within))
+          throw Error(`Source link escapes its repository: ${name}`);
+      }
+      hash.update("symlink\0").update(target).update("\0");
       continue;
     }
     hash.update(readFileSync(checkedFile(root, name))).update("\0");

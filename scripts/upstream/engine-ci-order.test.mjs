@@ -21,3 +21,14 @@ test('the clean CI runner installs dependencies before the engine typecheck', ()
   assert.doesNotMatch(installStep, /\n\s+(?:if:|continue-on-error:)/u,
     'The required installation cannot be skipped or converted into success');
 });
+
+test('the docs build selects canonical Node before invoking Astro', () => {
+  const start = workflow.indexOf('\n  docs-site-build:\n');
+  assert.ok(start >= 0);
+  const tail = workflow.slice(start), next = tail.slice(1).search(/\n  [A-Za-z0-9_-]+:\n/u);
+  const job = next < 0 ? tail : tail.slice(0, next + 1);
+  const node = job.indexOf('uses: ./.github/actions/setup-project-node');
+  const build = job.indexOf('run: bun run build');
+  assert.ok(node >= 0 && build > node, 'Astro must use the exact catalog runtime, never ambient runner Node');
+  assert.doesNotMatch(job.slice(job.lastIndexOf('\n      - name:', node), node), /\n\s+if:/u);
+});

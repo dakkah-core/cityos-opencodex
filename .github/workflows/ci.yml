@@ -1267,6 +1267,9 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.changes.outputs.checkout_ref }}
 
+      - name: Setup project Node
+        uses: ./.github/actions/setup-project-node
+
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
 

@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import {
   mkdtempSync,
   mkdirSync,
   writeFileSync,
   readFileSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -14,6 +17,8 @@ import {
   validateManifest,
   verifyDeclaredChanges,
   verifyReceipt,
+  captureSourceIdentity,
+  checkedFile,
 } from "./integration.mjs";
 
 const manifest = () => ({
@@ -37,6 +42,32 @@ const manifest = () => ({
       tests: ["tests/root.test.ts"],
     },
   ],
+});
+test("source identity hashes Git links while artifact checks still require ordinary files", () => {
+  const temporary = mkdtempSync(join(tmpdir(), "cityos-upstream-links-")), root = join(temporary, "repo");
+  mkdirSync(root); mkdirSync(join(root, "bin"));
+  const run = args => execFileSync("git", args, { cwd: root, windowsHide: true, stdio: "pipe" });
+  try {
+    writeFileSync(join(root, "target.mjs"), "export const identity = 1;\n");
+    symlinkSync("../target.mjs", join(root, "bin", "tool"), "file");
+    run(["init", "--quiet"]);
+    run(["add", "--", "target.mjs", "bin/tool"]);
+    run(["-c", "user.name=Source fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Source fixture"]);
+    const initial = captureSourceIdentity(root);
+    assert.equal(initial.dirty, false);
+    assert.throws(() => checkedFile(root, "bin/tool"), /escapes/u);
+    unlinkSync(join(root, "bin", "tool"));
+    symlinkSync("../missing.mjs", join(root, "bin", "tool"), "file");
+    const dangling = captureSourceIdentity(root);
+    assert.equal(dangling.dirty, true); assert.notEqual(dangling.sourceDigest, initial.sourceDigest);
+    unlinkSync(join(root, "bin", "tool"));
+    symlinkSync("../../outside.mjs", join(root, "bin", "tool"), "file");
+    assert.throws(() => captureSourceIdentity(root), /Source link escapes/u);
+  } finally {
+    assert.equal(dirname(resolve(temporary)), resolve(tmpdir()));
+    assert.ok(temporary.startsWith(join(tmpdir(), "cityos-upstream-links-")));
+    rmSync(temporary, { recursive: true, force: true, maxRetries: 3 });
+  }
 });
 test("declared bridges and owned extensions do not admit undeclared core edits", () => {
   assert.deepEqual(

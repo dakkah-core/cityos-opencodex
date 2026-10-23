@@ -148,7 +148,7 @@ function isPnpmPatchPath(text: string, match: RegExpExecArray): boolean {
 // name. Any byte change requires fresh review; every non-email detector still runs.
 const PUBLIC_UPSTREAM_RECORD = {
   path: "scripts/toolchains/astro-stable-config/stable4/SOURCE.json",
-  sha256: "550009b653de2dd850d682f2d9e77d6d4d4332f59032773c464dacbb9bb62677",
+  sha256: "c9275a28a2db6c2715a27aa26c6f7310ba4ec15523d6e67876099d98599e3922",
 } as const;
 
 /**
@@ -302,7 +302,7 @@ function addFindingsForPattern(
 export function scanText(file: string, text: string): Finding[] {
   const findings: Finding[] = [];
   const immutableAttribution = file === PUBLIC_UPSTREAM_RECORD.path
-    && createHash("sha256").update(text, "utf8").digest("hex") === PUBLIC_UPSTREAM_RECORD.sha256;
+    && createHash("sha256").update(text.replaceAll("\r\n", "\n"), "utf8").digest("hex") === PUBLIC_UPSTREAM_RECORD.sha256;
   addFindingsForPattern(
     findings,
     file,

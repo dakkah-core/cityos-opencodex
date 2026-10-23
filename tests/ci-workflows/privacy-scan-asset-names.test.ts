@@ -113,6 +113,15 @@ describe("privacy scan: immutable dependency inputs", () => {
     expect(scanText(sourcePath, source).filter(finding => finding.kind === "email")).toEqual([]);
   });
 
+  test("immutable attribution pins use Git LF bytes and reject changed records or paths", () => {
+    const lf = source.replaceAll("\r\n", "\n");
+    for (const body of [lf, lf.replaceAll("\n", "\r\n")]) {
+      expect(scanText(sourcePath, body).filter(finding => finding.kind === "email")).toEqual([]);
+    }
+    expect(scanText(sourcePath, lf + " ").some(finding => finding.kind === "email")).toBe(true);
+    expect(scanText("scripts/unrecorded-source.json", lf).some(finding => finding.kind === "email")).toBe(true);
+  });
+
   test("URL punctuation cannot introduce an exempt relative path or basename", () => {
     for (const separator of [";", ","]) {
       const basename = mailbox("package", "1.2.3.patch");

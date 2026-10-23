@@ -52,7 +52,7 @@ test("source identity hashes Git links while artifact checks still require ordin
     symlinkSync("../target.mjs", join(root, "bin", "tool"), "file");
     run(["init", "--quiet"]);
     run(["add", "--", "target.mjs", "bin/tool"]);
-    run(["-c", "user.name=Source fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Source fixture"]);
+    run(["-c", "user.name=Source fixture", "-c", "user.email=fixture@example.test", "commit", "--quiet", "-m", "Source fixture"]);
     const initial = captureSourceIdentity(root);
     assert.equal(initial.dirty, false);
     assert.throws(() => checkedFile(root, "bin/tool"), /escapes/u);

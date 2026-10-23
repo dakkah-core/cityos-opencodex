@@ -3,7 +3,7 @@
   "upstream": {
     "repository": "https://github.com/lidge-jun/opencodex",
     "branch": "main",
-    "commit": "994d15e8a3d071e231ff0de41eab9dfbee8817aa"
+    "commit": "83ec4f75a4cc97030c2fa7857e05e2ce222f376f"
   },
   "baselineForkCommit": "4312a6175201a77d3e49c76c80f0f0861465864d",
   "ownedDirectories": [

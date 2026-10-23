@@ -151,7 +151,7 @@
     "bun"
   ],
   "type": "module",
-  "version": "2.90.0",
+  "version": "2.91.0",
   "workspaces": {
     "packages": []
   }

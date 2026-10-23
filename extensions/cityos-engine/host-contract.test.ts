@@ -68,3 +68,36 @@ test('a rejected accounting callback cannot be followed by successful completion
   await assert.rejects(context.finalize({ outcome: 'completed', receiptRef: 'terminal' }), /unresolved_effect/);
   assert.equal(f.calls.finalization, 0);
 });
+
+test('client disconnect cancels new dispatch but preserves final usage settlement', async () => {
+  const f = fixture(), controller = new AbortController();
+  const context = await createEngineHostBoundary({ ...f.bindings,
+    usage: async ({ signal }) => { assert.equal(signal.aborted, false); f.calls.usage++; return true; },
+  }).admit(new Request('http://localhost/', { signal: controller.signal }));
+  await context.attempt(f.attempt('admitted-send'), f.send);
+  controller.abort();
+  const receipt = { receiptRef: 'partial-usage', inputTokens: 10, outputTokens: 2, cachedInputTokens: 0 };
+  await Promise.all([context.usage(receipt), context.usage(receipt)]);
+  await assert.rejects(context.attempt(f.attempt('after-disconnect'), f.send), /call_cancelled/);
+  await assert.rejects(context.management('after-disconnect', f.send), /call_cancelled/);
+  await context.finalize({ outcome: 'cancelled', receiptRef: 'cancelled-terminal' });
+  assert.equal(f.calls.provider, 1); assert.equal(f.calls.authorization, 1);
+  assert.equal(f.calls.usage, 1); assert.equal(f.calls.finalization, 1);
+});
+
+test('disconnect does not abort accounting already waiting for its owner', async () => {
+  const f = fixture(), controller = new AbortController();
+  let entered!: () => void, accept!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const acknowledged = new Promise<void>(resolve => { accept = resolve; });
+  const context = await createEngineHostBoundary({ ...f.bindings, usage: async ({ signal }) => {
+    entered(); await acknowledged; assert.equal(signal.aborted, false); f.calls.usage++; return true;
+  } }).admit(new Request('http://localhost/', { signal: controller.signal }));
+  const pending = context.usage({ receiptRef: 'in-flight-usage', inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 });
+  await started; controller.abort();
+  const finalization = context.finalize({ outcome: 'cancelled', receiptRef: 'settled-terminal' });
+  assert.equal(f.calls.finalization, 0);
+  accept(); await Promise.all([pending, finalization]);
+  assert.equal(f.calls.usage, 1); assert.equal(f.calls.finalization, 1);
+  assert.equal(f.calls.provider, 0);
+});

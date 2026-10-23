@@ -773,8 +773,8 @@ jobs:
       - name: Verify declared upstream modifications
         run: |
           node --test scripts/upstream/integration.test.mjs
+          node --test scripts/upstream/engine-ci-order.test.mjs
           node --test extensions/cityos-engine/host-contract.test.ts
-          node node_modules/typescript/bin/tsc --project extensions/cityos-engine/tsconfig.json
           node scripts/upstream/integration.mjs
 
       - name: Setup project Bun
@@ -787,6 +787,9 @@ jobs:
           bun install --frozen-lockfile
           cd gui
           bun install --frozen-lockfile
+
+      - name: Typecheck CityOS engine boundary
+        run: node node_modules/typescript/bin/tsc --project extensions/cityos-engine/tsconfig.json
 
       - name: GUI lint
         if: needs.changes.outputs.gui == 'true'

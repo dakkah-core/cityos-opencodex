@@ -12,6 +12,11 @@ host retains durable operation identities, replay protection, policy, tenant
 scope and accounting. A failed or ambiguous finalization remains failed; the
 boundary never creates a terminal receipt on behalf of an owner.
 
+Caller disconnection stops new provider and management operations. Usage already
+incurred settles through a separately bounded owner call, including an in-flight
+accounting callback. Finalization waits for those callbacks; owner rejection
+still prevents successful completion.
+
 The current upstream runtime does not yet invoke these ports. These unit tests
 qualify this contract only. The server factory, all transport call sites, packed
 engine and CMS migration must be qualified before this boundary can enforce

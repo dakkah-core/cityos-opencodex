@@ -53,6 +53,9 @@ export function createEngineHostBoundary(input: EngineHostBindings, hookDeadline
       const raw = await hook(request.signal, signal => bindings.admit({ request, signal }));
       if (!exact(raw, ['admitted', 'operationRef', 'context']) || raw.admitted !== true || !reference(raw.operationRef)) fail('engine_host_admission_rejected');
       const admission = Object.freeze({ ...raw }) as EngineHostAdmission;
+      // Settlement records already-incurred usage after a caller disconnects.
+      // Host calls stay bounded; dispatch and management retain the caller signal.
+      const accountingSignal = new AbortController().signal;
       let state: 'active' | 'finishing' | 'finished' = 'active';
       let rejectedEffect = false;
       let finalization: { identity: string; promise: Promise<void> } | undefined;
@@ -83,14 +86,14 @@ export function createEngineHostBoundary(input: EngineHostBindings, hookDeadline
           });
         },
         async usage(rawReceipt: EngineUsageReceipt): Promise<void> {
-          active();
+          if (state !== 'active') fail('engine_host_request_finalized');
           if (!exact(rawReceipt, ['receiptRef', 'inputTokens', 'outputTokens', 'cachedInputTokens']) || !reference(rawReceipt.receiptRef)
             || ![rawReceipt.inputTokens, rawReceipt.outputTokens, rawReceipt.cachedInputTokens].every(value => Number.isSafeInteger(value) && value >= 0)) fail('engine_host_usage_invalid');
           const receipt = Object.freeze({ ...rawReceipt }), identity = JSON.stringify(receipt), previous = usages.get(receipt.receiptRef);
           if (previous) { if (previous.identity !== identity) fail('engine_host_usage_conflict'); return previous.promise; }
           if (usages.size >= 1024) fail('engine_host_usage_bound_exceeded');
           const promise = tracked(async () => {
-            if (await hook(request.signal, signal => bindings.usage({ admission, receipt, signal })) !== true) fail('engine_host_usage_rejected');
+            if (await hook(accountingSignal, signal => bindings.usage({ admission, receipt, signal })) !== true) fail('engine_host_usage_rejected');
           });
           usages.set(receipt.receiptRef, { identity, promise }); return promise;
         },

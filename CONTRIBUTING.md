@@ -5,9 +5,13 @@ Thanks for helping with opencodex.
 - Start with the canonical guide: [Contributing](https://opencodex.me/contributing/)
 - Pull-request quality contract: [Review readiness and author responsibility](https://opencodex.me/contributing/pr-quality/)
 - Public user docs live in [`docs-site/`](./docs-site)
-- Current maintainer invariants live in [`structure/`](./structure)
+- Current maintainer invariants live in [`structure/`](./structure); start at [`structure/INDEX.md`](./structure/INDEX.md)
 - Maintainer roles and merge policy live in [`MAINTAINERS.md`](./MAINTAINERS.md)
-- Historical investigations live in [`docs/`](./docs)
+- Attribution for work landed through a maintainer carry lives in [`CREDITS.md`](./CREDITS.md)
+- Planning and investigation notes live in [`devlog/`](./devlog); older retired notes remain in git history
+- PR screenshots go in the pull request description, never on your branch: drag the image into the
+  description editor, or, with push access, commit it to the `pr-assets` branch and link it by commit SHA
+  (see that branch's README). Evidence images committed to a PR branch ride the squash merge into `dev`.
 
 ## Branches
 
@@ -29,8 +33,32 @@ For local development commands, architecture notes, and release workflow details
 contributing guide above instead of duplicating instructions here.
 
 Source development requires the `bun` CLI on your `PATH`. The published npm package bundles its own
-Bun runtime for end users, but contributor commands such as `bun install`, `bun run test`, and
-`bun run prepush` run from your local Bun installation.
+Bun runtime for end users. Package scripts such as `bun run test` and `bun run prepush` may resolve
+Bun through that bundled dependency.
+
+Tooling Node is selected from `config/toolchains/node-typescript.json`. Dependency versions live in
+each package's `catalog` / `catalogs`; root, GUI, docs and desktop keep separate Bun locks. The
+GUI compiler uses stable TypeScript 7. React Doctor alone has a scoped TypeScript 6 API alias.
+
+Named compatibility catalogs keep transitive APIs within their owners' declared ranges:
+Ajv 8 declares fast-uri `^3.0.1`, PostCSS 8 declares nanoid `^3.3.20`, and Starlight declares
+js-yaml `^4.1.1`. Their overrides apply only to those parents; default catalogs select the latest
+stable majors. The exact observed parent versions and catalog bindings are recorded in the
+toolchain catalog. This source selection makes no claim about installed transitive versions.
+
+Use `node scripts/npm-with-catalogs.mjs install` for a clean npm-only source bootstrap and
+`node scripts/npm-with-catalogs.mjs pack` for npm package assembly. These use separate concrete
+manifests; npm cannot install or pack the source `catalog:` declarations directly. The bootstrap
+installs bundled Bun without requiring a separate Bun installation. Existing source dependencies
+should be maintained with their owning Bun lock instead of repeating this clean bootstrap.
+
+## CI policy (maintainer decision — do not change)
+
+- Pull requests run **only the fast Ubuntu subset**.
+- Full cross-platform (macOS/Windows) CI runs **only** via manual
+  `workflow_dispatch` and on push to `main`/`preview` (release lines).
+- **Never** add a `dev` push trigger, or `pull_request` runs for macOS/Windows
+  jobs, to any workflow. PRs that change this policy will be closed.
 
 ## Pull request contract
 
@@ -55,21 +83,29 @@ A ready-for-review PR is the author's claim that the change is complete, underst
   stated. A closed PR can be reopened once the stated reason is resolved, or
   replaced with a clean one.
 
-## Pre-push hook
+## Local validation and hooks
 
-After cloning, run once to install a local pre-push hook that runs the typecheck,
-unit-test, privacy-scan, and (when `gui/` changed) GUI eslint and React Doctor
-portions of the CI gate:
+The suite source candidate is Bun 1.4.3 (`testRunnerBun`); the runtime source candidate is Bun 1.4.3.
+The roles remain separate. The upstream crash regression and green `lane=all` gate are pending;
+matching source versions do not establish validation, release eligibility or security approval.
+`scripts/test.ts` finds a 1.4.3 binary on PATH or in `~/.bun/bin`, or uses
+`OCX_TEST_RUNNER_BUN`; install that version locally if it is missing.
+
+Run `bun run test` before review readiness. If the full local suite is too costly
+for the task or available resources, run at least focused regression tests for
+the changed behavior. Document the reason, commands, results, and remaining
+coverage in the PR. Follow [AGENTS.md](./AGENTS.md#commands) for the complete
+validation policy; required CI must pass on the current PR head before merge.
+`bun run prepush` remains an optional comprehensive local check.
 
 ```sh
 bun run setup:hooks
 ```
 
-This installs a `pre-push` hook (into the hooks dir git reports, so worktrees and
-`core.hooksPath` work) that runs `bun run prepush` — `typecheck`,
-`lint:gui:if-changed`, `test`, `privacy:scan`, and `doctor:gui:if-changed` —
-before every `git push`. Both `lint:gui:if-changed` and `doctor:gui:if-changed`
-run their check only when the push touches `gui/`.
-The same checks run on ubuntu-latest, macos-latest, and windows-latest in CI (CI
-additionally builds the GUI and smoke-tests the CLI). Skip in an emergency with
-`git push --no-verify`.
+This removes the unmodified, retired repository `pre-push` and `post-merge` hooks
+from Git's resolved hooks directory, including linked worktrees and
+`core.hooksPath` setups. Custom hooks are preserved. The managed post-merge hook
+was retired because it executed pulled code on every merge; rebuild the packaged
+dashboard explicitly with `bun run build:gui` after a merge that changes `gui/`
+sources. Validation no longer runs automatically on every push; existing
+contributors should rerun the setup command once to migrate their hooks.

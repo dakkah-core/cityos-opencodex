@@ -11,7 +11,7 @@ vision 和网络搜索 sidecar 也可以使用你的 ChatGPT 登录凭据。
 
 | 要求 | 原因 |
 | --- | --- |
-| **[Node](https://nodejs.org) ≥ 18** | `ocx` 运行在 Bun 运行时上，但运行时会在 `npm install` 时自动打包，你**无需**自己安装 Bun。 |
+| **[Node](https://nodejs.org) 26** | `ocx` 运行在 Bun 运行时上，但运行时会在 `npm install` 时自动打包，你**无需**自己安装 Bun。 |
 | **[OpenAI Codex](https://openai.com/codex)**(CLI、App 或 SDK) | opencodex 所代理的客户端。opencodex 会写入 `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）。 |
 | 一个 provider 账号或 API key | Anthropic、xAI、Kimi、Ollama Cloud、OpenRouter、OpenAI API key、一个 OpenAI 兼容端点,或你的 ChatGPT 登录凭据。 |
 
@@ -41,6 +41,18 @@ sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 opencodex --version
 ```
+
+## 独立二进制文件（无需 npm）
+
+发布包还包含适用于 macOS、Linux 和 Windows 的独立 `ocx` 二进制文件。
+它内置 Bun 运行时和仪表盘，因此无需安装 npm、Node 或单独的 Bun。下载适合你平台的压缩包，解压后运行：
+
+```bash
+./ocx --version
+./ocx start
+```
+
+为了让仪表盘可用，请将解压后的 `gui/dist` 目录保留在二进制文件旁边。
 
 ### 发布渠道
 
@@ -78,7 +90,7 @@ opencodex 状态文件位于 `$OPENCODEX_HOME`（默认 `~/.opencodex`），Code
 | --- | --- |
 | `$OPENCODEX_HOME/config.json` | 你的 provider、默认 provider、端口及选项。 |
 | `$OPENCODEX_HOME/ocx.pid` | 正在运行的代理的 PID（单实例保护）。 |
-| `$OPENCODEX_HOME/runtime-port.json` | 当前 PID、主机名和端口，包括自动选择的备用端口。 |
+| `$OPENCODEX_HOME/runtime-port.json` | 当前 PID、主机名和端口，包括 `config.port` 为 `0` 时由操作系统分配的端口。 |
 | `$OPENCODEX_HOME/auth.json` | 执行 `ocx login` 后保存的 OAuth 凭据。 |
 | `$OPENCODEX_HOME/catalog-backup*.json` | opencodex 修改 Codex 模型目录前创建的备份。 |
 | `$CODEX_HOME/config.toml` | 仅监听回环地址时，opencodex 会添加由自身标记管理的根级 `openai_base_url`；监听非回环地址时，则使用 `model_provider = "opencodex"` 和 `[model_providers.opencodex]`，以便 Codex 发送 API 认证 header。 |

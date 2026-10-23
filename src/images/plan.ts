@@ -1,6 +1,8 @@
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
+import { toolChoiceToolPredicate } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
-import { resolveEnvValue } from "../config";
+import { resolveProviderApiKey } from "../providers/key-store";
+import { getValidAccessToken } from "../oauth/index";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
 
@@ -35,8 +37,21 @@ export function findXaiProvider(config: OcxConfig): { name: string; provider: Oc
  */
 export function resolveXaiImageApiKey(provider: OcxProviderConfig): string | undefined {
   if (provider.authMode === "oauth") return undefined;
-  const apiKey = resolveEnvValue(provider.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(provider.apiKey)?.trim();
   return apiKey || undefined;
+}
+
+/** Token for the /v1/images → Imagine relay. OAuth reuses the Grok CLI grant. */
+export async function resolveXaiImageAuthToken(provider: OcxProviderConfig): Promise<string | undefined> {
+  if (provider.authMode === "oauth") {
+    try {
+      const token = (await getValidAccessToken("xai"))?.trim();
+      return token || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return resolveXaiImageApiKey(provider);
 }
 
 export async function planImageBridge(
@@ -46,6 +61,13 @@ export async function planImageBridge(
 ): Promise<ImageBridgePlan | undefined> {
   if (config.images?.bridgeEnabled !== true) return undefined;
   if (!parsed._imageGeneration) return undefined;
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
+  const toolNames = new Set([...parsed._imageGeneration.toolNames].filter(name => toolAllowed({ name })));
+  if (toolAllowed({ name: IMAGE_GEN_TOOL_NAME })) toolNames.add(IMAGE_GEN_TOOL_NAME);
+  if (toolNames.size === 0) return undefined;
+  // Responses advertises and rewrites authorized aliases to this synthetic name, so the loop
+  // must always intercept it once any image-generation name has armed the bridge.
+  toolNames.add(IMAGE_GEN_TOOL_NAME);
   // Don't intercept for OpenAI native passthrough
   const host = (() => { try { return new URL(routedProvider.baseUrl).hostname; } catch { return ""; } })();
   if (host === "api.openai.com") return undefined;
@@ -57,9 +79,7 @@ export async function planImageBridge(
   const registryEntry = getProviderRegistryEntry("xai");
   const pinnedBaseUrl = (registryEntry?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
   // The synthetic tool injected into the conversation is named IMAGE_GEN_TOOL_NAME,
-  // which is what the model will actually call. Merge it with any original hosted tool names.
-  const toolNames = new Set(parsed._imageGeneration.toolNames);
-  toolNames.add(IMAGE_GEN_TOOL_NAME);
+  // which is what the model will actually call. toolNames also retains authorized hosted aliases.
   const original = parsed._imageGeneration.originalTool;
   const hostedSize = typeof original?.size === "string" ? original.size : undefined;
   const hostedQuality = typeof original?.quality === "string" ? original.quality : undefined;
@@ -95,16 +115,6 @@ export async function planVideoBridge(
   routedProvider: OcxProviderConfig,
 ): Promise<VideoBridgePlan | undefined> {
   if (config.images?.videoBridgeEnabled !== true) return undefined;
-  // Don't intercept for OpenAI native passthrough
-  const host = (() => { try { return new URL(routedProvider.baseUrl).hostname; } catch { return ""; } })();
-  if (host === "api.openai.com") return undefined;
-  const found = findXaiProvider(config);
-  if (!found) return undefined;
-  const token = resolveXaiImageApiKey(found.provider);
-  if (!token) return undefined;
-  // Pin the baseUrl to the registry entry, ignoring any config-level baseUrl override.
-  const registryEntry = getProviderRegistryEntry("xai");
-  const pinnedBaseUrl = (registryEntry?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
   const toolNames = new Set<string>();
   toolNames.add(VIDEO_GEN_TOOL_NAME);
   // Collect any existing function tools whose name matches a video_gen alias
@@ -118,6 +128,21 @@ export async function planVideoBridge(
       toolNames.add(fnName);
     }
   }
+  const toolAllowed = toolChoiceToolPredicate(parsed.options?.toolChoice);
+  for (const name of toolNames) {
+    if (!toolAllowed({ name })) toolNames.delete(name);
+  }
+  if (toolNames.size === 0) return undefined;
+  // Don't intercept for OpenAI native passthrough
+  const host = (() => { try { return new URL(routedProvider.baseUrl).hostname; } catch { return ""; } })();
+  if (host === "api.openai.com") return undefined;
+  const found = findXaiProvider(config);
+  if (!found) return undefined;
+  const token = resolveXaiImageApiKey(found.provider);
+  if (!token) return undefined;
+  // Pin the baseUrl to the registry entry, ignoring any config-level baseUrl override.
+  const registryEntry = getProviderRegistryEntry("xai");
+  const pinnedBaseUrl = (registryEntry?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
   const timeoutMs = clampImageTimeoutMs(config.images?.videoTimeoutMs);
   const keepRaw = config.images?.artifactsKeepCount;
   const artifactsKeepCount =

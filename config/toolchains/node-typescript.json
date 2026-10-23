@@ -1,0 +1,79 @@
+{
+  "node": "26.12.0",
+  "nodeMajor": 26,
+  "nodeEngine": ">=26.0.0 <27.0.0",
+  "nodeTypes": "26.6.5",
+  "typescript": "7.0.2",
+  "bunRoles": {
+    "runtime": "package.json catalog.bun",
+    "testRunner": "package.json catalogs.test-runner.bun",
+    "candidateStatus": "source-candidate",
+    "unifiedLaneStatus": "pending",
+    "rejoinGate": "Keep runtime and test-runner roles separate. The upstream runner crash fix and a green lane=all dispatch must prove the unified version before any role consolidation. Equal source candidate versions are not gate evidence; release and security gates remain required."
+  },
+  "dependencyApiMigrations": {
+    "evidenceBoundary": "Parent ranges describe the upstream baseline. Default catalog overrides require installed consumer regression checks and affected builds; declarations alone are not compatibility evidence.",
+    "bindings": [
+      {
+        "manifest": "package.json",
+        "selector": "ajv@^8",
+        "parent": "ajv",
+        "observedParentVersion": "8.20.0",
+        "parentDeclaredRange": "^3.0.1",
+        "dependency": "fast-uri",
+        "catalog": "default"
+      },
+      {
+        "manifest": "gui/package.json",
+        "selector": "ajv@^8",
+        "parent": "ajv",
+        "observedParentVersion": "8.20.0",
+        "parentDeclaredRange": "^3.0.1",
+        "dependency": "fast-uri",
+        "catalog": "default"
+      },
+      {
+        "manifest": "gui/package.json",
+        "selector": "postcss",
+        "parent": "postcss",
+        "observedParentVersion": "8.5.31",
+        "parentDeclaredRange": "^3.3.20",
+        "dependency": "nanoid",
+        "catalog": "default"
+      },
+      {
+        "manifest": "docs-site/package.json",
+        "selector": "postcss",
+        "parent": "postcss",
+        "observedParentVersion": "8.5.31",
+        "parentDeclaredRange": "^3.3.20",
+        "dependency": "nanoid",
+        "catalog": "default"
+      },
+      {
+        "manifest": "docs-site/package.json",
+        "selector": "js-yaml",
+        "parent": "@astrojs/starlight",
+        "observedParentVersion": "0.42.6",
+        "parentDeclaredRange": "^4.1.1",
+        "dependency": "js-yaml",
+        "catalog": "default"
+      },
+      {
+        "manifest": "docs-site/package.json",
+        "selector": "js-yaml",
+        "parent": "@astrojs/internal-helpers",
+        "observedParentVersion": "0.11.0",
+        "parentDeclaredRange": "^4.3.0",
+        "dependency": "js-yaml",
+        "catalog": "default"
+      }
+    ]
+  },
+  "lockDomains": [".", "gui", "docs-site", "desktop"],
+  "typescriptCompatibility": {
+    "consumer": "react-doctor",
+    "binding": "gui/package.json overrides react-doctor/typescript",
+    "purpose": "Third-party compiler API compatibility until TS7.1; first-party checking uses the stable TS7 CLI."
+  }
+}

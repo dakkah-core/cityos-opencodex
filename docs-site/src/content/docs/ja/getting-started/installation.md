@@ -11,7 +11,7 @@ opencodex をインストールすると同じ実行ファイルを指す `ocx` 
 
 | 要件 | 理由 |
  --- | --- |
-| **[Node](https://nodejs.org) ≥ 18** | `ocx` は Bun ランタイムで実行されますが、ランタイムは `npm install` 時に自動でバンドルされるため、Bun を自分でインストールする必要は**ありません**。 |
+| **[Node](https://nodejs.org) 26** | `ocx` は Bun ランタイムで実行されますが、ランタイムは `npm install` 時に自動でバンドルされるため、Bun を自分でインストールする必要は**ありません**。 |
 | **[OpenAI Codex](https://openai.com/codex)**(CLI、App、または SDK) | opencodex が前に立つクライアントです。opencodex は `$CODEX_HOME/config.toml`(デフォルト `~/.codex/config.toml`)に書き込みます。 |
 | プロバイダーアカウントまたは API キー | Anthropic、xAI、Kimi、Ollama Cloud、OpenRouter、OpenAI API キー、OpenAI 互換エンドポイント、または ChatGPT ログイン。 |
 
@@ -42,6 +42,19 @@ sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ocx --version
 opencodex --version
 ```
+
+## スタンドアロンバイナリ（npm 不要）
+
+リリースには、対応する macOS、Linux、Windows 向けのスタンドアロン `ocx` バイナリも含まれます。
+Bun ランタイムとダッシュボードが含まれるため、npm、Node、別途の Bun インストールは必要ありません。
+お使いの環境向けのアーカイブをダウンロードして展開し、次のように実行します。
+
+```bash
+./ocx --version
+./ocx start
+```
+
+ダッシュボードを提供するため、展開した `gui/dist` ディレクトリはバイナリの隣に置いたままにしてください。
 
 ### 配布チャネル
 
@@ -80,7 +93,7 @@ opencodex の状態ファイルは `$OPENCODEX_HOME`(デフォルト `~/.opencod
  --- | --- |
 | `$OPENCODEX_HOME/config.json` | プロバイダー、デフォルトプロバイダー、ポート、オプション。 |
 | `$OPENCODEX_HOME/ocx.pid` | 実行中のプロキシの PID(単一インスタンスガード)。 |
-| `$OPENCODEX_HOME/runtime-port.json` | 自動で選んだ代替ポートを含む現在の PID、ホスト名、ポート。 |
+| `$OPENCODEX_HOME/runtime-port.json` | 現在の PID、ホスト名、ポート。`config.port` が `0` の場合に OS が割り当てたポートも含みます。 |
 | `$OPENCODEX_HOME/auth.json` | 保存された OAuth 認証情報(`ocx login` 時)。 |
 | `$OPENCODEX_HOME/catalog-backup*.json` | opencodex が変更する前に作成した Codex モデルカタログのバックアップ。 |
 | `$CODEX_HOME/config.toml` | ローカル専用構成では opencodex が管理するルート `openai_base_url` を追加します。ローカル以外のアドレスにバインドする場合は Codex が API 認証ヘッダーを送れるよう `model_provider = "opencodex"` と `[model_providers.opencodex]` を使います。 |

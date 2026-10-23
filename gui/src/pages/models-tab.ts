@@ -6,16 +6,17 @@
  * is already large and because the tests want to import this directly.
  */
 
-import { navigateHash, normalizeHashPath } from "../hash-routing";
+import { navigateHash, normalizeHashPath, splitHashQuery } from "../hash-routing";
+import { JEV_AUTO_CREATE_HASH } from "../app-routing";
 
 /**
  * `catalog` rather than `models` for the first tab: the page is Models and its first
  * tab shows the plain model list, so a distinct id keeps "the page" and "the tab" from
  * ever having to be disambiguated in code. The visible label is still "Models".
  */
-export type ModelsTab = "catalog" | "combos" | "routing";
+export type ModelsTab = "catalog" | "combos" | "routing" | "compatibility";
 
-export const MODELS_TABS: readonly ModelsTab[] = ["catalog", "combos", "routing"];
+export const MODELS_TABS: readonly ModelsTab[] = ["catalog", "combos", "routing", "compatibility"];
 
 export function modelsTabHash(tab: ModelsTab): string {
   return tab === "catalog" ? "models" : `models/${tab}`;
@@ -31,9 +32,11 @@ export function modelsTabHash(tab: ModelsTab): string {
  * on the catalog while the URL claimed Combos.
  */
 export function readModelsTab(hash = window.location.hash): ModelsTab {
-  const raw = normalizeHashPath(hash);
-  if (raw === "models/combos" || raw === "combos" || raw.startsWith("combos/")) return "combos";
+  // A compatibility prefilter rides in `?query` (protocol-deep-links.ts); the tab is the path.
+  const raw = splitHashQuery(normalizeHashPath(hash)).path;
+  if (raw === "models/combos" || raw === JEV_AUTO_CREATE_HASH || raw === "combos" || raw.startsWith("combos/")) return "combos";
   if (raw === "models/routing" || raw === "routing" || raw.startsWith("routing/")) return "routing";
+  if (raw === "models/compatibility" || raw === "lab" || raw.startsWith("lab/")) return "compatibility";
   return "catalog";
 }
 

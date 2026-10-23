@@ -2,7 +2,13 @@ name: PR hygiene
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, labeled, unlabeled]
+    # `edited` is here for the carry-attribution check alone. Every other
+    # hygiene failure is about the diff, so only a push can clear it -- but the
+    # remedy this one asks for is a `Co-authored-by` trailer, which an author
+    # can add to the description without touching the branch. Without `edited`
+    # the fix would be invisible until an unrelated push, and the author would
+    # reasonably conclude the gate was broken.
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled]
 
 # Trusted scripts from the PR base revision only. Patches are read through the
 # GitHub API; PR-head code is never checked out or executed.
@@ -30,9 +36,17 @@ jobs:
       - name: Checkout trusted hygiene script
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          # pull_request_target must pin scripts to the PR base SHA, not the
-          # repository default branch: PRs target `dev` while `main` may lag.
-          ref: ${{ github.event.pull_request.base.sha }}
+          # Source trusted scripts from an integration branch, never from the
+          # PR's own base commit. A stacked child PR's base is another open
+          # PR's head, so `base.sha` let an unpromoted commit choose which code
+          # runs with this job's issues/pull-requests write token.
+          #
+          # The branch is chosen, not fixed: `pull_request_target` loads this
+          # workflow from the default branch, so a `main`-targeting PR must
+          # take its scripts from `main` too, or the gate runs a `main`
+          # workflow against `dev` scripts. Everything else, including stacked
+          # bases, resolves to `dev`, the single integration line.
+          ref: ${{ github.event.pull_request.base.ref == 'main' && 'main' || 'dev' }}
           persist-credentials: false
           sparse-checkout: .github/scripts
 
@@ -49,6 +63,9 @@ jobs:
             );
             const { authorHasPushPermission } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-quality.cjs"),
+            );
+            const { resolveReferencedAuthors } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-referenced-authors.cjs"),
             );
             const {
               GATE_MARKER,
@@ -68,6 +85,7 @@ jobs:
               "suppression-approved": ["5319e7", "Maintainer approved a new type or lint suppression"],
               "generated-change-approved": ["5319e7", "Maintainer approved committed generated output"],
               "dependency-change-approved": ["5319e7", "Maintainer approved exceptional dependency or lockfile handling"],
+              "attribution-approved": ["5319e7", "Maintainer approved a carry whose original author is not named in a trailer"],
               "maintainer-sponsored": ["5319e7", "Maintainer sponsors this change to an auth, workflow, release, or dependency surface"],
             };
 
@@ -100,6 +118,7 @@ jobs:
                 "suppression-approved",
                 "generated-change-approved",
                 "dependency-change-approved",
+                "attribution-approved",
               ]) {
                 if (labels.has(name)) {
                   await github.rest.issues.removeLabel({
@@ -130,12 +149,30 @@ jobs:
                 `Could not look up collaborator permission: ${error.message}`,
               );
             }
+            // The squash body is assembled from the description and the
+            // branch's commit messages, so a carry's trailer can live in
+            // either. Read both, and resolve the authors of whatever the text
+            // says it carries.
+            const prCommits = await github.paginate(github.rest.pulls.listCommits, {
+              owner, repo, pull_number, per_page: 100,
+            });
+            const commitMessages = prCommits.map((entry) => entry.commit?.message ?? "");
+            const referencedAuthors = await resolveReferencedAuthors({
+              github, owner, repo, core,
+              texts: [pr.title ?? "", pr.body ?? "", ...commitMessages],
+            });
+
             const failures = collectDeterministicHygieneFailures({
               files,
               labels: [...labels],
               authorHasPushPermission:
                 !permissionLookupFailed &&
                 authorHasPushPermission(authorPermission),
+              prAuthorLogin: pr.user?.login ?? "",
+              title: pr.title ?? "",
+              body: pr.body ?? "",
+              commits: commitMessages,
+              referencedAuthors,
             });
 
             async function setBlocked(blocked) {

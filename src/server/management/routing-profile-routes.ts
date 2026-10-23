@@ -16,17 +16,18 @@ import {
   routingProfileIssues,
 } from "../../routing/profile";
 import { evaluatePolicyProfile, type PolicyCandidateEvidence, type PolicyRequestEvidence } from "../../routing/evaluator";
-import { candidateCapabilityEvidence } from "../../routing/capability";
-import { policyCandidateHealthEvidence } from "../../routing/health";
+import { assemblePolicyCandidateEvidence } from "../../routing/compatibility/assemble";
+import { activateLab, labActivationRequired } from "../../lib/lab-activation";
 import { quotaEvidenceForCandidate } from "../../routing/quota";
-import { costEvidenceForCandidate } from "../../routing/cost";
-import { saveConfigPreservingClaudeCode } from "../../config";
+import { routedProviderConfig } from "../../router";
+import { deleteConfigTopLevelKey, saveConfigPreservingClaudeCode, getConfigDir } from "../../config";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { isPlainRecord } from "./shared";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 import type { OcxConfig, OcxRoutingProfileConfig } from "../../types";
+import { shadowCallTargetError } from "./shadow-call-validation";
 
 function profileDto(config: Parameters<typeof getRoutingProfile>[0], id: string): Record<string, unknown> | null {
   const profile = getRoutingProfile(config, id);
@@ -41,6 +42,7 @@ function profileDto(config: Parameters<typeof getRoutingProfile>[0], id: string)
     optimize: profile.optimize,
     limits: profile.limits,
     unknownEvidence: profile.unknownEvidence,
+    ...(profile.compatibility ? { compatibility: profile.compatibility } : {}),
   };
 }
 
@@ -61,7 +63,7 @@ function parseEvidence(raw: unknown): { evidence: PolicyRequestEvidence; ok: boo
   return { evidence, ok: true };
 }
 
-function parseCandidateEvidence(raw: unknown): PolicyCandidateEvidence[] | null {
+function parseCandidateEvidence(raw: unknown, config: OcxConfig): PolicyCandidateEvidence[] | null {
   if (!Array.isArray(raw)) return null;
   const out: PolicyCandidateEvidence[] = [];
   for (const item of raw) {
@@ -85,10 +87,10 @@ function parseCandidateEvidence(raw: unknown): PolicyCandidateEvidence[] | null 
       // caller does not supply an explicit quota object, so a dry-run following
       // the documented shape reports the same cached account quota as routing.
       ...(item.quota === undefined && typeof item.codexAccountId === "string"
-        ? { quota: quotaEvidenceForCandidate({ provider, model, codexAccountId: item.codexAccountId }) }
+        ? { quota: quotaEvidenceForCandidate({ provider, model, codexAccountId: item.codexAccountId }, config) }
         : {}),
       ...(item.quota === undefined && typeof item.accountRef === "string" && typeof item.codexAccountId !== "string"
-        ? { quota: quotaEvidenceForCandidate({ provider, model, accountRef: item.accountRef }) }
+        ? { quota: quotaEvidenceForCandidate({ provider, model, accountRef: item.accountRef }, config) }
         : {}),
     });
   }
@@ -98,26 +100,11 @@ function parseCandidateEvidence(raw: unknown): PolicyCandidateEvidence[] | null 
 function assembleCandidateEvidence(
   config: OcxConfig,
   profile: NonNullable<ReturnType<typeof getRoutingProfile>>,
+  now: number,
 ): PolicyCandidateEvidence[] {
-  // Match execution: fill the same candidate evidence the router would
-  // assemble, so dry-run/evaluate reports the same eligibility as real routing
-  // instead of treating every capability as unknown. Cost is always present so
-  // evaluate mode can surface the profile limit even without a usage estimate.
-  return profile.candidates.map(candidate => ({
-    provider: candidate.provider,
-    model: candidate.model,
-    capability: candidateCapabilityEvidence(config, candidate.provider, candidate.model),
-    health: policyCandidateHealthEvidence(config, candidate),
-    quota: quotaEvidenceForCandidate({
-      provider: candidate.provider,
-      model: candidate.model,
-    }),
-    cost: costEvidenceForCandidate({
-      provider: candidate.provider,
-      model: candidate.model,
-      limitUsd: profile.limits.maxEstimatedCostUsd,
-    }),
-  }));
+  return assemblePolicyCandidateEvidence(config, profile, now, {
+    routedProviderConfig,
+  });
 }
 
 function storedProfile(
@@ -220,6 +207,15 @@ function migrateProfileModelReferences(
         ]),
       );
     }
+    if (claudeCode.intercept?.modelMap) {
+      // First-party picker bindings: keys are Anthropic picker ids, only the route follows the rename.
+      claudeCode.intercept = {
+        ...claudeCode.intercept,
+        modelMap: Object.fromEntries(
+          Object.entries(claudeCode.intercept.modelMap).map(([pickerId, route]) => [pickerId, migrateAgentReference(route)]),
+        ),
+      };
+    }
     config.claudeCode = claudeCode;
   }
   return shouldSyncClaudeAgentDefs;
@@ -290,10 +286,12 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     }
 
     const previousProfile = mode === "update" ? getRoutingProfile(config, id) : undefined;
+    let aliasMigration: { oldPublicModel: string; newPublicModel: string } | undefined;
     if (mode === "update" && previousProfile) {
       const oldPublicModel = policyPublicModelId(id, previousProfile);
       const newProfile = normalizeRoutingProfile(id, body.profile as OcxRoutingProfileConfig);
       const newPublicModel = policyPublicModelId(id, newProfile);
+      aliasMigration = { oldPublicModel, newPublicModel };
       const collision = modelMapMigrationCollision(config, oldPublicModel, newPublicModel);
       if (collision) {
         return jsonResponse({
@@ -303,7 +301,22 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     }
     const nextProfiles = { ...(config.routingProfiles ?? {}) };
     nextProfiles[id] = storedProfile(id, body.profile as OcxRoutingProfileConfig);
+    const currentShadowTarget = config.shadowCallIntercept?.model;
+    if (aliasMigration && currentShadowTarget === aliasMigration.oldPublicModel) {
+      const targetError = shadowCallTargetError(
+        { ...config, routingProfiles: nextProfiles },
+        aliasMigration.newPublicModel,
+      );
+      if (targetError) {
+        return jsonResponse({
+          error: { code: "invalid_shadow_call_target", message: targetError },
+        }, 400, req, config);
+      }
+    }
     config.routingProfiles = nextProfiles;
+    // Creating the first profile on a process started profile-less must install the
+    // compatibility provider now; activation is synchronous and idempotent per configDir.
+    if (labActivationRequired(config, getConfigDir())) activateLab(config, getConfigDir());
     // An alias change on update renames the public model id; rewrite config
     // references (disabledModels, subagentModels, injectionModel,
     // shadowCallIntercept, claudeCode) so they follow the new alias.
@@ -340,7 +353,7 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     const nextProfiles = { ...(config.routingProfiles ?? {}) };
     delete nextProfiles[id];
     if (Object.keys(nextProfiles).length > 0) config.routingProfiles = nextProfiles;
-    else delete config.routingProfiles;
+    else deleteConfigTopLevelKey(config, "routingProfiles");
     const saveConfigPreservingClaudeCodeSafe = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
     saveConfigPreservingClaudeCodeSafe(config);
     reconcileLiveStateStores();
@@ -370,13 +383,20 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     if (!ok) {
       return jsonResponse({ error: { code: "invalid_evidence", message: "evidence must be an object" } }, 400, req, config);
     }
+    // One clock read for both assembly and evaluation keeps freshness, health,
+    // and trace timestamps mutually consistent with the production router.
+    const now = Date.now();
+    // R3-1: dry-run assembles candidate evidence independently of the startup gate, so an
+    // operator preview on a process started without profiles would silently omit
+    // compatibility evidence and disagree with production. Activate first.
+    if (labActivationRequired(config, getConfigDir())) activateLab(config, getConfigDir());
     const candidateEvidence = body.candidates === undefined
-      ? assembleCandidateEvidence(config, resolvedProfile)
-      : parseCandidateEvidence(body.candidates);
+      ? assembleCandidateEvidence(config, resolvedProfile, now)
+      : parseCandidateEvidence(body.candidates, config);
     if (candidateEvidence === null) {
       return jsonResponse({ error: { code: "invalid_candidates", message: "candidates must be an array of evidence objects" } }, 400, req, config);
     }
-    const result = evaluatePolicyProfile(config, profile, evidence, candidateEvidence);
+    const result = evaluatePolicyProfile(config, profile, evidence, candidateEvidence, now);
     return jsonResponse(result, 200, req, config);
   }
 

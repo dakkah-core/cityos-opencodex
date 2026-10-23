@@ -3,7 +3,7 @@
  * Read-only: never writes to external credential stores.
  * Ported from jawcode packages/ai/src/utils/oauth/local-token-detect.ts (xAI portion).
  */
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -24,7 +24,10 @@ export function detectGrokCliToken(): OAuthCredentials | null {
 
     const accessToken = entry.key as string;
     const refreshToken = entry.refresh_token as string;
-    const expiresAt = entry.expires_at ? new Date(entry.expires_at as string).getTime() : 0;
+    const parsedExpiresAt = entry.expires_at ? new Date(entry.expires_at as string).getTime() : 0;
+    // Guard against unparseable/NaN expiries: a non-finite value must never be treated as
+    // "valid forever". Unknown → 0, which forces the refresh-validation path downstream.
+    const expiresAt = Number.isFinite(parsedExpiresAt) ? parsedExpiresAt : 0;
 
     return {
       refresh: refreshToken,
@@ -55,6 +58,9 @@ export function shouldAdoptGrokGeneration(
   now = Date.now(),
   refreshSkewMs = 60_000,
 ): boolean {
+  // A non-finite disk expiry means we cannot reason about the generation: the credential is
+  // either garbage or unknown. Treat it as requiring refresh validation, never as an upgrade.
+  if (!Number.isFinite(disk.expires)) return false;
   if (disk.expires <= now + refreshSkewMs) return false;
   const bothExpiriesExist = stored.expires > 0 && disk.expires > 0;
   if (bothExpiriesExist) return disk.expires >= stored.expires;
@@ -103,12 +109,35 @@ function readClaudeSecureStorage(): string | null {
   return readClaudeKeychain() ?? readClaudeCredentialsFile();
 }
 
+/** Non-blocking Keychain read for request paths; same item and timeout as the sync reader. */
+function readClaudeKeychainAsync(): Promise<string | null> {
+  if (process.platform !== "darwin") return Promise.resolve(null);
+  return new Promise(resolve => {
+    execFile("security", ["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"], { encoding: "utf8", timeout: 5000 },
+      (error, stdout) => resolve(error ? null : stdout.trim() || null));
+  });
+}
+
+/**
+ * Async variant of {@link detectClaudeCodeToken} with the same source precedence. A request-path
+ * caller must not hold the event loop for a Keychain lookup (up to five seconds).
+ */
+export async function detectClaudeCodeTokenAsync(): Promise<OAuthCredentials | null> {
+  const raw = process.env.CLAUDE_CONFIG_DIR?.trim()
+    ? readClaudeCredentialsFile() ?? await readClaudeKeychainAsync()
+    : await readClaudeKeychainAsync() ?? readClaudeCredentialsFile();
+  return raw ? parseClaudeOauthPayload(raw) : null;
+}
+
 export function parseClaudeOauthPayload(raw: string): OAuthCredentials | null {
   try {
     const data = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string; refreshToken?: string; expiresAt?: number } };
     const o = data.claudeAiOauth;
     if (!o?.accessToken || !o?.refreshToken) return null;
-    return { access: o.accessToken, refresh: o.refreshToken, expires: o.expiresAt ?? 0, source: "local-cli" };
+    // Number.isFinite guard: a string/NaN expiresAt must not flow into downstream time
+    // comparisons as a "valid forever" value. Unknown → 0 (refresh-validation path).
+    const expires = typeof o.expiresAt === "number" && Number.isFinite(o.expiresAt) ? o.expiresAt : 0;
+    return { access: o.accessToken, refresh: o.refreshToken, expires, source: "local-cli" };
   } catch {
     return null;
   }
@@ -118,4 +147,11 @@ export function detectClaudeCodeToken(): OAuthCredentials | null {
   const raw = readClaudeSecureStorage();
   if (!raw) return null;
   return parseClaudeOauthPayload(raw);
+}
+
+/** Shared-token continuity for opaque Claude tokens; fully rotated pairs need authenticated account proof. */
+export function hasClaudeCredentialContinuity(stored: OAuthCredentials, disk: OAuthCredentials): boolean {
+  const sameToken = (left: string, right: string): boolean =>
+    typeof left === "string" && left.trim().length > 0 && left === right;
+  return sameToken(stored.refresh, disk.refresh) || sameToken(stored.access, disk.access);
 }

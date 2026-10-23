@@ -1,0 +1,52 @@
+name: Setup project Bun
+description: >-
+  Resolve the package.json Bun source candidate for runtime (default) or test-runner.
+
+# Both role candidates select 1.4.3; the unified-version lane=all gate is PENDING.
+# Selecting a candidate does not prove the runner crash fixed or any lane green.
+# Previously, runtime 1.4.2 addressed #6684's Windows Bun.fetch stream truncation;
+# the test runner skipped it after its multi-file --isolate preload segfault
+# (#6713 run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9). It moved from 1.4.0 to
+# 1.4.3 for oven-sh/bun#44581: 1.4.0's Bun.spawnSync could lose a child's exit after
+# finalizers ran inside an earlier call and spin past its own timeout (#4956).
+# Keep both roles. Consolidation requires the upstream crash fix and a green
+# lane=all dispatch; release and security gates still apply.
+inputs:
+  role:
+    description: Bun role to install (runtime or test-runner).
+    required: false
+    default: runtime
+
+outputs:
+  version:
+    description: The resolved Bun version string.
+    value: ${{ steps.resolve.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve project Bun version
+      id: resolve
+      shell: bash
+      env:
+        BUN_ROLE: ${{ inputs.role }}
+      run: |
+        node <<'NODE'
+        const pkg = require('./package.json');
+        const { resolveBunVersion } = require('./bin/version-catalog.cjs');
+        const role = process.env.BUN_ROLE;
+        let version;
+        try {
+          version = resolveBunVersion(pkg, role);
+        } catch (error) {
+          console.error(`::error::${error.message}`);
+          process.exit(1);
+        }
+        require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+        console.log(`Using Bun source candidate ${version} from the package.json catalog (${role}); unified lane gate pending`);
+        NODE
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      with:
+        bun-version: ${{ steps.resolve.outputs.version }}

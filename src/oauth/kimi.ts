@@ -4,6 +4,7 @@ import * as os from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { getConfigDir } from "../config";
 import type { OAuthController, OAuthCredentials } from "./types";
 
@@ -107,6 +108,7 @@ function getDeviceId(): string {
     if ((e as { code?: string })?.code !== "ENOENT") throw e;
   }
   const id = randomUUID().replace(/-/g, "");
+  assertNotRealHomeUnderTest(getConfigDir());
   recordOwnedConfigPath(getConfigDir(), p);
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeFileSync(p, id + "\n", { mode: 0o600 });
@@ -151,7 +153,21 @@ async function requestDeviceAuthorization(): Promise<{
 }
 
 function parseTokenPayload(payload: TokenResponse, refreshFallback?: string): OAuthCredentials {
-  if (!payload.access_token || typeof payload.expires_in !== "number") {
+  // Number.isFinite is required here: typeof NaN === "number", so the type check
+  // alone would let a NaN expires_in through and produce a never-refreshing expiry.
+  // Negative durations would stamp an already-past expiry — also malformed.
+  // The computed timestamp itself must also stay finite: Number.MAX_VALUE passes
+  // Number.isFinite but overflows to Infinity once multiplied by 1000.
+  if (
+    !payload.access_token
+    || typeof payload.expires_in !== "number"
+    || !Number.isFinite(payload.expires_in)
+    || payload.expires_in < 0
+  ) {
+    throw new Error("Kimi token response missing required fields");
+  }
+  const expires = Date.now() + payload.expires_in * 1000 - OAUTH_EXPIRY_SKEW_MS;
+  if (!Number.isFinite(expires)) {
     throw new Error("Kimi token response missing required fields");
   }
   const refresh = payload.refresh_token ?? refreshFallback;
@@ -160,7 +176,7 @@ function parseTokenPayload(payload: TokenResponse, refreshFallback?: string): OA
   return {
     access: payload.access_token,
     refresh,
-    expires: Date.now() + payload.expires_in * 1000 - OAUTH_EXPIRY_SKEW_MS,
+    expires,
     ...identity,
   };
 }
@@ -195,7 +211,15 @@ async function pollForToken(deviceCode: string, intervalMs: number, expiresInMs:
 
 export async function loginKimi(ctrl: OAuthController): Promise<OAuthCredentials> {
   const device = await requestDeviceAuthorization();
-  ctrl.onAuth?.({ url: device.verificationUriComplete, instructions: `Enter code: ${device.userCode}` });
+  // `deviceCode` carries the human-typed user code, matching the other device
+  // providers. It is also what tells the management login route this is a device
+  // flow, so a provider-supplied verification URI is no longer handed to a local
+  // browser spawn — the URL stays visible and copyable in every login surface.
+  ctrl.onAuth?.({
+    url: device.verificationUriComplete,
+    instructions: `Enter code: ${device.userCode}`,
+    deviceCode: device.userCode,
+  });
   return pollForToken(device.deviceCode, device.intervalMs, device.expiresInMs, ctrl.signal);
 }
 

@@ -1,13 +1,17 @@
 import {
   closeSync,
+  constants as fsConstants,
   existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
+  readFileSync,
   readSync,
   statSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { jcsStringify } from "../digest";
 import { MAX_SERIALIZED_EVENT_BYTES } from "../constants";
@@ -21,11 +25,204 @@ export interface LedgerStore {
   replay(): ReplayResult;
 }
 
-/** Durable append of one validated event as a single JSONL line + fsync. */
-export function appendLabEvent(ledgerPath: string, event: LabEvent): void {
-  const validated = validateLabEvent(event);
+export interface LedgerMutationContext {
+  replay(): ReplayResult;
+  append(event: LabEvent): void;
+  appendIfAbsent(event: LabEvent): boolean;
+}
+
+const LEDGER_LOCK_STALE_MS = 60_000;
+const LEDGER_LOCK_WAIT_MS = 5_000;
+
+interface LedgerLockMeta {
+  pid: number;
+  createdAt: number;
+  token: string;
+}
+
+/** Block synchronously for the given duration (ledger lock retry only). */
+function sleepSyncMs(ms: number): void {
+  Bun.sleepSync(ms);
+}
+
+/** Read pid, createdAt, and token metadata from a ledger lock file, if well-formed. */
+function readLedgerLockMeta(lockPath: string): LedgerLockMeta | null {
+  try {
+    const parsed = JSON.parse(readFileSync(lockPath, "utf8")) as LedgerLockMeta;
+    if (
+      typeof parsed.pid === "number"
+      && typeof parsed.createdAt === "number"
+      && typeof parsed.token === "string"
+      && parsed.token.length > 0
+    ) {
+      return parsed;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** Return true when the lock holder process is still running. */
+function isLockHolderAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
+    return false;
+  }
+}
+
+/** Return true when a ledger lock file has dead metadata and can be recovered. */
+function isLedgerLockStale(lockPath: string): boolean {
+  const meta = readLedgerLockMeta(lockPath);
+  if (!meta) {
+    try {
+      return Date.now() - statSync(lockPath).mtimeMs > LEDGER_LOCK_STALE_MS;
+    } catch {
+      return false;
+    }
+  }
+  return !isLockHolderAlive(meta.pid);
+}
+
+/** Write lock ownership metadata to a newly created exclusive lock file. */
+function writeLedgerLockMeta(fd: number, token: string): void {
+  const metadataBytes = Buffer.from(JSON.stringify({
+    pid: process.pid,
+    createdAt: Date.now(),
+    token,
+  }), "utf8");
+  let written = 0;
+  while (written < metadataBytes.byteLength) {
+    const n = writeSync(fd, metadataBytes, written, metadataBytes.byteLength - written);
+    if (n <= 0) {
+      throw new LabValidationError("short_write", "ledger lock metadata write incomplete");
+    }
+    written += n;
+  }
+}
+
+/** Discard a lock whose exclusive creator failed before publishing ownership metadata. */
+function discardUninitialisedLedgerLock(lockPath: string, lockFd: number): void {
+  try {
+    closeSync(lockFd);
+  } catch {
+    /* ignore */
+  }
+  try {
+    unlinkSync(lockPath);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Release a lock file only when the token still matches the path owner. */
+function releaseLedgerLock(lockPath: string, lockFd: number, token: string): void {
+  try {
+    closeSync(lockFd);
+  } catch {
+    /* ignore */
+  }
+  try {
+    const meta = readLedgerLockMeta(lockPath);
+    if (meta?.token === token) unlinkSync(lockPath);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Recover one stale lock while holding a separate recovery mutex.
+ *
+ * The recovery mutex prevents two waiters from both observing the same stale
+ * owner and then unlinking each other's replacement lock. If a process dies
+ * while holding the recovery mutex, acquisition fails closed instead of
+ * guessing ownership of that mutex.
+ */
+function recoverStaleLedgerLock(lockPath: string): boolean {
+  const recoveryPath = `${lockPath}.recovery`;
+  const token = randomBytes(16).toString("hex");
+  let recoveryFd: number;
+  try {
+    recoveryFd = openSync(
+      recoveryPath,
+      fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+      0o600,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
+
+  try {
+    writeLedgerLockMeta(recoveryFd, token);
+  } catch (error) {
+    discardUninitialisedLedgerLock(recoveryPath, recoveryFd);
+    throw error;
+  }
+
+  try {
+    // Re-check after taking the recovery mutex. Another waiter may already
+    // have recovered the old lock and installed a live replacement.
+    if (!existsSync(lockPath) || !isLedgerLockStale(lockPath)) return false;
+    unlinkSync(lockPath);
+    return true;
+  } finally {
+    releaseLedgerLock(recoveryPath, recoveryFd, token);
+  }
+}
+
+/** Create a ledger lock file exclusively, recovering stale locks when needed. */
+function tryAcquireLedgerLock(lockPath: string, deadline: number): { fd: number; token: string } {
+  while (Date.now() < deadline) {
+    const token = randomBytes(16).toString("hex");
+    let fd: number;
+    try {
+      fd = openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+    } catch (error) {
+      if (existsSync(lockPath) && isLedgerLockStale(lockPath)) {
+        try {
+          if (recoverStaleLedgerLock(lockPath)) continue;
+        } catch (recoveryError) {
+          if (Date.now() >= deadline) throw recoveryError;
+        }
+      }
+      if (Date.now() >= deadline) throw error;
+      sleepSyncMs(10);
+      continue;
+    }
+    try {
+      writeLedgerLockMeta(fd, token);
+    } catch (error) {
+      discardUninitialisedLedgerLock(lockPath, fd);
+      throw error;
+    }
+    return { fd, token };
+  }
+  throw new Error("ledger lock acquisition timed out");
+}
+
+/** Run a ledger mutation while holding the compatibility ledger lock file. */
+function withLedgerLock<T>(ledgerPath: string, fn: () => T): T {
+  const lockPath = `${ledgerPath}.lock`;
   mkdirSync(dirname(ledgerPath), { recursive: true, mode: 0o700 });
-  const line = `${jcsStringify(validated)}\n`;
+  const deadline = Date.now() + LEDGER_LOCK_WAIT_MS;
+  const { fd, token } = tryAcquireLedgerLock(lockPath, deadline);
+  try {
+    return fn();
+  } finally {
+    releaseLedgerLock(lockPath, fd, token);
+  }
+}
+
+/** Durable append of one already-validated event as a single JSONL line + fsync. */
+function appendValidatedLabEvent(ledgerPath: string, event: LabEvent): void {
+  mkdirSync(dirname(ledgerPath), { recursive: true, mode: 0o700 });
+  const line = `${jcsStringify(event)}\n`;
   const bytes = new TextEncoder().encode(line);
   const fd = openSync(ledgerPath, "a", 0o600);
   try {
@@ -41,6 +238,78 @@ export function appendLabEvent(ledgerPath: string, event: LabEvent): void {
   } finally {
     closeSync(fd);
   }
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" && value !== null) || typeof value === "function"
+  ) && typeof (value as { then?: unknown }).then === "function";
+}
+
+/**
+ * Serialize a ledger read-modify-write transaction with all ordinary appends.
+ * The callback is intentionally synchronous. Mutation methods become invalid
+ * as soon as the callback returns, so an accidental async continuation cannot
+ * write after the lock has been released.
+ */
+export function withLedgerMutation<T>(
+  ledgerPath: string,
+  fn: (mutation: LedgerMutationContext) => T,
+): T {
+  return withLedgerLock(ledgerPath, () => {
+    let active = true;
+    const requireActive = () => {
+      if (!active) {
+        throw new LabValidationError(
+          "inactive_ledger_mutation",
+          "ledger mutation context used after its lock was released",
+        );
+      }
+    };
+    const replay = () => {
+      requireActive();
+      return replayLabLedger(ledgerPath);
+    };
+    const append = (event: LabEvent) => {
+      requireActive();
+      appendValidatedLabEvent(ledgerPath, validateLabEvent(event));
+    };
+    const appendIfAbsent = (event: LabEvent): boolean => {
+      requireActive();
+      const validated = validateLabEvent(event);
+      if (replay().events.some((row) => row.eventId === validated.eventId)) return false;
+      appendValidatedLabEvent(ledgerPath, validated);
+      return true;
+    };
+
+    try {
+      const result = fn({ replay, append, appendIfAbsent });
+      if (isThenable(result)) {
+        throw new LabValidationError(
+          "async_ledger_mutation",
+          "ledger mutation callback must be synchronous",
+        );
+      }
+      return result;
+    } finally {
+      active = false;
+    }
+  });
+}
+
+/** Durable append of one validated event as a single JSONL line + fsync. */
+export function appendLabEvent(ledgerPath: string, event: LabEvent): void {
+  withLedgerMutation(ledgerPath, (mutation) => {
+    mutation.append(event);
+  });
+}
+
+/**
+ * Append only when eventId is absent. Uses the same mutation lock as every
+ * other ledger writer so the presence check and append are one transaction.
+ */
+export function appendLabEventIfAbsent(ledgerPath: string, event: LabEvent): boolean {
+  return withLedgerMutation(ledgerPath, (mutation) => mutation.appendIfAbsent(event));
 }
 
 function processLine(

@@ -4,13 +4,13 @@ set -euo pipefail
 echo "Installing opencodex..."
 
 if ! command -v node &>/dev/null; then
-  echo "Node.js 18+ is required. Install Node from https://nodejs.org/ and rerun this script." >&2
+  echo "Node.js 26 is required. Install Node from https://nodejs.org/ and rerun this script." >&2
   exit 1
 fi
 
 NODE_MAJOR=$(node -p "Number(process.versions.node.split('.')[0])")
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  echo "Node.js 18+ is required. Current version: $(node --version)" >&2
+if [ "$NODE_MAJOR" -ne 26 ]; then
+  echo "Node.js 26 is required. Current version: $(node --version)" >&2
   exit 1
 fi
 

@@ -20,22 +20,34 @@
  * Used by the catalog v2-gated-ultra policy (devlog/260709_v2_gated_ultra) and the
  * `ocx v2` toggle surface. The FLAG itself is never written here — toggling goes
  * through the official `codex features enable|disable` CLI (format-preserving).
- * The one write this module owns is the numeric
- * `features.multi_agent_v2.max_concurrent_threads_per_session` scalar
- * (setMaxConcurrentThreads): the codex CLI has no persisted setter for nested
- * feature config (`-c` is per-invocation only), so ocx does a scoped,
- * EOL-preserving line edit — same practice as codex/inject.ts.
+ * The writes this module owns are the scoped scalars —
+ * `features.multi_agent_v2.max_concurrent_threads_per_session` and the
+ * `[agents]`/`[features]` fields the management API exposes: the codex CLI has
+ * no persisted setter for nested feature config (`-c` is per-invocation only),
+ * so ocx does scoped, EOL-preserving line edits — each one a read → edit →
+ * rename under the shared config write lock (see config-write-lock.ts).
  *
  * CODEX_HOME is resolved at CALL time (activeCodexConfigPath pattern, mirrors
  * catalog.ts:40-54) so tests can point fixtures via env or the explicit
  * `configPath` parameter without fighting the module-load-time const in paths.ts.
  */
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { createRequire } from "node:module";
 import { realpathSync } from "node:fs";
-import { AtomicWriteResidualTempError, AtomicWriteSecretResidualError, atomicWriteFile, expandUserPath } from "../config";
+import { homedir } from "node:os";
+import { AtomicWriteResidualTempError, AtomicWriteSecretResidualError, atomicWriteFile, getConfigDir } from "../config";
+import { ConfigWriteDestinationChanged, assertNativeConfigWriteDestination, runConfigWriteChild, withConfigWriteRecovery, publishConfigWrite, configWriteLockFailureMessage, withConfigWriteLock, withConfigWriteLockHeld, type LockHandle } from "./config-write-lock";
+import { codexHomeIsAbsent } from "./codex-home-owner";
 import { forgetEphemeralSecretPath } from "../lib/windows-secret-acl";
-import { CODEX_CONFIG_PATH } from "./paths";
+import { resolveCodexHomeDir } from "./home";
+import { resolveAndPersistCodexRuntime } from "./runtime";
+import { decodeOverlayState } from "./shim-state-file";
+import { canonicalizeOpenCodexModeHint } from "./multi-agent-mode-policy";
+import { rootAssignmentKey, sourceText, splitSourceLines } from "./toml-source-lines";
+
+const AGENTS_THREAD_LIMIT_KEY = "max_concurrent_threads_per_session";
+const LEGACY_AGENTS_THREAD_LIMIT_KEY = "max_threads";
 
 /** Upstream codex-rs feature key: allow `request_user_input` in Default mode. */
 export const DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY = "default_mode_request_user_input";
@@ -63,14 +75,14 @@ function mergeTrailingComments(existing?: string, migrated?: string): string {
 }
 
 export function activeCodexConfigPath(): string {
-  const raw = process.env.CODEX_HOME?.trim();
-  if (!raw) return CODEX_CONFIG_PATH;
-  const path = resolve(expandUserPath(raw));
-  try {
-    return join(realpathSync.native(path), "config.toml");
-  } catch {
-    return join(path, "config.toml");
+  // Keep home aliases observable by the held destination validator.
+  const home = resolveCodexHomeDir();
+  if (!process.env.CODEX_HOME?.trim()) {
+    const alias = join(homedir(), ".codex");
+    try { if (realpathSync.native(alias) === home) return join(alias, "config.toml"); }
+    catch { /* An absent local home can select the WSL Windows-home fallback. */ }
   }
+  return join(home, "config.toml");
 }
 
 function readConfigText(configPath?: string): string | null {
@@ -81,6 +93,46 @@ function readConfigText(configPath?: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * One edit's answer: either the replacement content or a refusal. `next` equal
+ * to the input is a no-change result — the helper compares before writing, so
+ * an edit never has to spell "unchanged" differently.
+ */
+type TomlEditOutcome = { next: string } | { error: string };
+
+/**
+ * One read → edit → write pass over config.toml under the shared write lock.
+ *
+ * The edit callback sees bytes re-read INSIDE the lock, so it is always
+ * computed against what is actually on disk and no cooperating writer can land
+ * while the section runs. Previously every writer in this file read outside
+ * any lock and renamed over the whole file — a foreign rewrite landing between
+ * read and rename was silently discarded (a prompt-layer projection, another
+ * scalar edit, an injection's routing keys).
+ *
+ * A busy lock maps to the shared locked message: the sections under it are
+ * millisecond-scale, so refusing fast and letting the caller retry beats
+ * queuing behind whatever holds it.
+ */
+function editCodexConfigToml(
+  path: string,
+  edit: (content: string) => TomlEditOutcome,
+  heldConfigWriteLock?: LockHandle,
+): ConfigEditResult {
+  if (codexHomeIsAbsent(dirname(path))) return { ok: false, error: `config.toml not readable at ${path}` };
+  const locked = withConfigWriteLockHeld(path, heldConfigWriteLock, (held): ConfigEditResult => {
+    const content = readConfigText(path);
+    if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
+    const outcome = edit(content);
+    if ("error" in outcome) return { ok: false, error: outcome.error };
+    if (outcome.next === content) return { ok: true, changed: false };
+    publishConfigWrite(path, held, (destination, hooks) => atomicWriteFile(destination, outcome.next, undefined, hooks));
+    return { ok: true, changed: true };
+  });
+  if (!locked.ok) return { ok: false, error: configWriteLockFailureMessage(locked), ...(locked.error === "unsafe" ? { retryable: false } : {}) };
+  return locked.value;
 }
 
 /**
@@ -153,6 +205,29 @@ export function multiAgentV2EnabledFromConfigText(content: string | null): boole
     return false;
   }
 
+  // Bun 1.4 enforces TOML's "value must begin on the assignment line" rule that
+  // 1.3.14 did not, so `hint =` followed by `[` on the next line now fails the
+  // real parse and reaches the line-based fallback below — which reads that `[`
+  // as a table header and truncates the table before `enabled`. Codex's own
+  // parser accepts the document, so answering "disabled" would report a parser
+  // disagreement as a feature state (#1295, #1691).
+  //
+  // Joining a dangling `=` to the line that follows is the smallest repair that
+  // keeps the scanner untouched: widening `tomlTableBody` to be string-aware is
+  // what previously broke `getAgentsEnabled`, `getAgentsMaxDepth`, and
+  // `getMaxConcurrentThreads` (see its comment). If the joined document parses,
+  // that answer is authoritative; if it does not, nothing is lost.
+  const joined = joinDanglingTomlAssignments(content);
+  if (joined !== content) {
+    const reparsed = parsedTomlTable(joined, "features");
+    if (reparsed !== null) {
+      const table = plainTomlRecord(reparsed.multi_agent_v2);
+      if (table !== null) return table.enabled === true;
+      if (typeof reparsed.multi_agent_v2 === "boolean") return reparsed.multi_agent_v2;
+      return false;
+    }
+  }
+
   const table = tomlTableBody(content, "features.multi_agent_v2");
   if (table !== null) {
     const enabled = tomlBoolInBody(table, "enabled");
@@ -180,6 +255,41 @@ function plainTomlRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+/**
+ * Join `key =` to the following line when the value was written on the next
+ * line, so a parser enforcing TOML's same-line rule can read the document.
+ *
+ * Bun 1.3.14 accepted this shape; Bun 1.4 rejects it, correctly — TOML requires
+ * the value to begin on the assignment line. Codex's parser still accepts it, so
+ * this exists to keep the two readers agreeing rather than to endorse the shape.
+ *
+ * Deliberately narrow: it only acts on a line whose LAST non-comment character
+ * is `=`, which cannot occur in a valid assignment. Lines inside multi-line
+ * strings are left alone — a `"""` body line ending in `=` would be rewritten,
+ * but the result is only used when it PARSES, and the unmodified document is
+ * always tried first, so a wrong join cannot displace a correct read.
+ */
+function joinDanglingTomlAssignments(content: string): string {
+  const lines = content.split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    // A dangling assignment: trailing `=` with nothing after it on this line.
+    if (/^[^#]*[^=!<>]=\s*$/.test(line) && i + 1 < lines.length) {
+      let j = i + 1;
+      // Skip blank and comment-only lines between the `=` and its value.
+      while (j < lines.length && /^\s*(?:#.*)?$/.test(lines[j]!)) j++;
+      if (j < lines.length) {
+        out.push(`${line.replace(/\s*$/, "")} ${lines[j]!.replace(/^\s*/, "")}`);
+        i = j;
+        continue;
+      }
+    }
+    out.push(line);
+  }
+  return out.join("\n");
 }
 
 /**
@@ -222,36 +332,31 @@ export function isDefaultModeRequestUserInputEnabled(configPath?: string): boole
 }
 
 /**
- * TRUE when config.toml still carries `[agents] max_threads` — codex-rs REFUSES to
- * boot with that key while multi_agent_v2 is enabled ("agents.max_threads cannot be
- * set when features.multi_agent_v2 is enabled", core/src/config/mod.rs:1421). The
- * `ocx v2 on` flow warns about it instead of editing config itself.
+ * Whether either spelling of the [agents] limit is present, including invalid
+ * values. Keep the exported compatibility name; migrations must remove both.
  */
 export function hasAgentsMaxThreads(configPath?: string): boolean {
   const content = readConfigText(configPath);
   if (content === null) return false;
   const parsed = parsedTomlTable(content, "agents");
-  if (parsed !== null) return Object.hasOwn(parsed, "max_threads");
-  const agents = tomlTableBody(content, "agents");
-  if (agents === null) return false;
-  return /^\s*max_threads\s*=/m.test(agents);
+  if (parsed !== null) return Object.hasOwn(parsed, AGENTS_THREAD_LIMIT_KEY) || Object.hasOwn(parsed, LEGACY_AGENTS_THREAD_LIMIT_KEY);
+  return agentsThreadLimitEntries(content).entries.length > 0;
 }
 
-/** Current legacy v1 `[agents] max_threads`, or null when absent/invalid. */
+/** Canonical [agents] limit, falling back to max_threads only when absent. */
 export function getAgentsMaxThreads(configPath?: string): number | null {
   const content = readConfigText(configPath);
   if (content === null) return null;
   const parsed = parsedTomlTable(content, "agents");
   if (parsed !== null) {
-    const value = parsed.max_threads;
+    const value = Object.hasOwn(parsed, AGENTS_THREAD_LIMIT_KEY) ? parsed[AGENTS_THREAD_LIMIT_KEY] : parsed[LEGACY_AGENTS_THREAD_LIMIT_KEY];
     return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null;
   }
-  const agents = tomlTableBody(content, "agents");
-  if (agents === null) return null;
-  const m = agents.match(/^\s*max_threads\s*=\s*(\d+)\s*(?:#.*)?$/m);
-  if (!m) return null;
-  const value = Number(m[1]);
-  return Number.isInteger(value) && value >= 1 ? value : null;
+  // Unrelated valid 64-bit integers can make Bun reject the whole document.
+  // Decode the same isolated structural assignment the editor uses, including
+  // quoted keys and non-decimal integers, rather than treating unreadable as unset.
+  const entries = agentsThreadLimitEntries(content).entries;
+  return (entries.find(entry => entry.key === AGENTS_THREAD_LIMIT_KEY) ?? entries[0])?.value ?? null;
 }
 
 /**
@@ -347,26 +452,22 @@ export function v2TotalLimitToV1ChildLimit(totalLimit: number): number {
 }
 
 /**
- * Persist `features.multi_agent_v2.max_concurrent_threads_per_session = value`.
- * Scoped edit in either the dedicated table or `[features]` boolean/inline form.
- * Boolean form is upgraded to an inline config so the numeric value remains
- * attached to the feature without a TOML key conflict. Idempotent on equal value.
+ * The content-level half of `setMaxConcurrentThreads`, reused by
+ * `ensureDisabledV2Config` so a nested edit never re-takes the write lock on
+ * the file its caller already holds.
  */
-export function setMaxConcurrentThreads(value: number, configPath?: string, migratedComment?: string): { ok: true; changed: boolean } | { ok: false; error: string } {
-  if (!Number.isInteger(value) || value < 1) {
-    return { ok: false, error: "max_concurrent_threads_per_session must be an integer >= 1" };
-  }
-  const path = configPath ?? activeCodexConfigPath();
-  const content = readConfigText(path);
-  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
-
+function maxConcurrentThreadsEdit(
+  content: string,
+  value: number,
+  migratedComment?: string,
+): TomlEditOutcome {
   const eol = dominantEol(content);
   const lines = content.split(/\r?\n/);
   const headerRe = /^\s*\[features\.multi_agent_v2\]\s*(?:#.*)?$/;
   const headerIdx = lines.findIndex(l => headerRe.test(l));
   if (headerIdx === -1) {
     const featuresHeader = lines.findIndex(l => /^\s*\[features\]\s*(?:#.*)?$/.test(l));
-    if (featuresHeader === -1) return { ok: false, error: "multi_agent_v2 feature config not found — enable v2 first (ocx v2 on)" };
+    if (featuresHeader === -1) return { error: "multi_agent_v2 feature config not found — enable v2 first (ocx v2 on)" };
     let featuresEnd = lines.length;
     for (let i = featuresHeader + 1; i < lines.length; i++) {
       if (/^\s*\[/.test(lines[i])) { featuresEnd = i; break; }
@@ -377,21 +478,19 @@ export function setMaxConcurrentThreads(value: number, configPath?: string, migr
       const bool = lines[i].match(boolRe);
       if (bool) {
         lines[i] = `${bool[1]}multi_agent_v2 = { enabled = ${bool[2]}, max_concurrent_threads_per_session = ${value} }${mergeTrailingComments(bool[3], migratedComment)}`;
-        atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-        return { ok: true, changed: true };
+        return { next: applyEol(lines.join("\n"), eol) };
       }
       const inline = lines[i].match(inlineRe);
       if (!inline) continue;
       const existing = inline[2].match(/(?:^|,)\s*max_concurrent_threads_per_session\s*=\s*(\d+)\s*(?=,|$)/);
-      if (existing && Number(existing[1]) === value && (!migratedComment || migratedComment === inline[3])) return { ok: true, changed: false };
+      if (existing && Number(existing[1]) === value && (!migratedComment || migratedComment === inline[3])) return { next: content };
       const body = existing
         ? inline[2].replace(/(^|,)\s*max_concurrent_threads_per_session\s*=\s*\d+\s*(?=,|$)/, `$1 max_concurrent_threads_per_session = ${value}`)
         : `${inline[2].trim()}${inline[2].trim() ? ", " : ""}max_concurrent_threads_per_session = ${value}`;
       lines[i] = `${inline[1]}multi_agent_v2 = { ${body.trim()} }${mergeTrailingComments(inline[3], migratedComment)}`;
-      atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-      return { ok: true, changed: true };
+      return { next: applyEol(lines.join("\n"), eol) };
     }
-    return { ok: false, error: "multi_agent_v2 feature config not found — enable v2 first (ocx v2 on)" };
+    return { error: "multi_agent_v2 feature config not found — enable v2 first (ocx v2 on)" };
   }
   let end = lines.length;
   for (let i = headerIdx + 1; i < lines.length; i++) {
@@ -401,17 +500,29 @@ export function setMaxConcurrentThreads(value: number, configPath?: string, migr
   for (let i = headerIdx + 1; i < end; i++) {
     const m = lines[i].match(keyRe);
     if (!m) continue;
-    if (Number(m[2]) === value && (!migratedComment || migratedComment === m[3])) return { ok: true, changed: false };
+    if (Number(m[2]) === value && (!migratedComment || migratedComment === m[3])) return { next: content };
     lines[i] = `${m[1]}max_concurrent_threads_per_session = ${value}${mergeTrailingComments(m[3], migratedComment)}`;
-    atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-    return { ok: true, changed: true };
+    return { next: applyEol(lines.join("\n"), eol) };
   }
   lines.splice(headerIdx + 1, 0, `max_concurrent_threads_per_session = ${value}${migratedComment ?? ""}`);
-  atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-  return { ok: true, changed: true };
+  return { next: applyEol(lines.join("\n"), eol) };
 }
 
-type ConfigEditResult = { ok: true; changed: boolean } | { ok: false; error: string };
+/**
+ * Persist `features.multi_agent_v2.max_concurrent_threads_per_session = value`.
+ * Scoped edit in either the dedicated table or `[features]` boolean/inline form.
+ * Boolean form is upgraded to an inline config so the numeric value remains
+ * attached to the feature without a TOML key conflict. Idempotent on equal value.
+ */
+export function setMaxConcurrentThreads(value: number, configPath?: string, migratedComment?: string): { ok: true; changed: boolean } | { ok: false; error: string } {
+  if (!Number.isInteger(value) || value < 1) {
+    return { ok: false, error: "max_concurrent_threads_per_session must be an integer >= 1" };
+  }
+  const path = configPath ?? activeCodexConfigPath();
+  return editCodexConfigToml(path, content => maxConcurrentThreadsEdit(content, value, migratedComment));
+}
+
+type ConfigEditResult = { ok: true; changed: boolean } | { ok: false; error: string; retryable?: boolean };
 
 /**
  * Encode a string as a TOML single-line basic string.
@@ -451,16 +562,46 @@ function encodeTomlBasicString(value: string): string {
  */
 function decodeTomlStringToken(token: string): string | null {
   if (token.length < 2) return null;
+  // Multi-line literal string: `'''...'''` verbatim (backslashes not special).
+  if (token.startsWith("'''")) {
+    return token.endsWith("'''") && token.length >= 6
+      ? normalizeTomlMultilineBody(token.slice(3, -3))
+      : null;
+  }
+  // Multi-line basic string: `"""..."""` with escapes.
+  if (token.startsWith('"""')) {
+    if (!token.endsWith('"""') || token.length < 6) return null;
+    return decodeBasicStringBody(normalizeTomlMultilineBody(token.slice(3, -3)), true);
+  }
   if (token.startsWith("'")) {
     return token.endsWith("'") ? token.slice(1, -1) : null;
   }
   if (!token.startsWith('"') || !token.endsWith('"')) return null;
-  const body = token.slice(1, -1);
+  return decodeBasicStringBody(token.slice(1, -1));
+}
+
+/** Apply TOML's multi-line newline rules before string-body decoding. */
+function normalizeTomlMultilineBody(body: string): string {
+  const normalized = body.replace(/\r\n/g, "\n");
+  return normalized.startsWith("\n") ? normalized.slice(1) : normalized;
+}
+
+/** Unescape the body of a TOML basic string (single- or multi-line). */
+function decodeBasicStringBody(body: string, multiline = false): string | null {
   let out = "";
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
     if (ch !== "\\") { out += ch; continue; }
     const esc = body[++i];
+    if (multiline) {
+      let newline = i;
+      while (body[newline] === " " || body[newline] === "\t") newline++;
+      if (body[newline] === "\n") {
+        i = newline;
+        while (body[i + 1] === " " || body[i + 1] === "\t" || body[i + 1] === "\n") i++;
+        continue;
+      }
+    }
     switch (esc) {
       case "\\": out += "\\"; break;
       case '"': out += '"'; break;
@@ -499,6 +640,28 @@ function scanTomlValueEnd(text: string, start: number): number {
   while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
   const first = text[i];
   if (first === '"') {
+    // Multi-line basic string: `"""..."""`. The closing delimiter is a triple
+    // quote; a single or double quote inside the body does not end the token.
+    if (text[i + 1] === '"' && text[i + 2] === '"') {
+      i += 3;
+      while (i < text.length) {
+        if (text[i] === "\\") { i += 2; continue; }
+        if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+          // TOML permits up to two quotes immediately inside the closing
+          // delimiter, so a 4- or 5-quote run means the extra one or two
+          // quotes are part of the value. Consume the full valid run and
+          // keep the surplus quotes in the body.
+          let end = i + 3;
+          if (text[end] === '"') {
+            end++;
+            if (text[end] === '"') end++;
+          }
+          return end;
+        }
+        i++;
+      }
+      return text.length;
+    }
     i++;
     while (i < text.length) {
       if (text[i] === "\\") { i += 2; continue; }
@@ -508,6 +671,24 @@ function scanTomlValueEnd(text: string, start: number): number {
     return text.length;
   }
   if (first === "'") {
+    // Multi-line literal string: `'''...'''`.
+    if (text[i + 1] === "'" && text[i + 2] === "'") {
+      i += 3;
+      while (i < text.length) {
+        if (text[i] === "'" && text[i + 1] === "'" && text[i + 2] === "'") {
+          // Same as multi-line basic: up to two surplus single quotes can
+          // precede the closing delimiter and remain part of the value.
+          let end = i + 3;
+          if (text[end] === "'") {
+            end++;
+            if (text[end] === "'") end++;
+          }
+          return end;
+        }
+        i++;
+      }
+      return text.length;
+    }
     const close = text.indexOf("'", i + 1);
     return close === -1 ? text.length : close + 1;
   }
@@ -546,6 +727,40 @@ function findInlineTableEnd(text: string, openIdx: number): number {
 
 interface InlineEntry { keyStart: number; valueStart: number; valueEnd: number }
 
+/** Locate a top-level assignment while skipping complete (possibly multiline) values. */
+function findTomlAssignment(text: string, key: string): InlineEntry | null {
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    let i = lineStart;
+    while (text[i] === " " || text[i] === "\t") i++;
+    const keyStart = i;
+    let keyText = "";
+    if (text[i] === '"' || text[i] === "'") {
+      const keyEnd = scanTomlValueEnd(text, i);
+      keyText = decodeTomlStringToken(text.slice(i, keyEnd)) ?? "";
+      i = keyEnd;
+    } else {
+      const match = /^[A-Za-z0-9_-]+/.exec(text.slice(i));
+      if (match) {
+        keyText = match[0];
+        i += match[0].length;
+      }
+    }
+    while (text[i] === " " || text[i] === "\t") i++;
+    if (keyText && text[i] === "=") {
+      const valueStart = i + 1;
+      const valueEnd = scanTomlValueEnd(text, valueStart);
+      if (keyText === key) return { keyStart, valueStart, valueEnd };
+      const nextLine = text.indexOf("\n", valueEnd);
+      lineStart = nextLine === -1 ? text.length : nextLine + 1;
+      continue;
+    }
+    const nextLine = text.indexOf("\n", lineStart);
+    lineStart = nextLine === -1 ? text.length : nextLine + 1;
+  }
+  return null;
+}
+
 /**
  * Locate `key = value` inside the inline-table body spanning [bodyStart, bodyEnd)
  * (exclusive of the braces), string-aware on both keys and values, or null.
@@ -579,6 +794,24 @@ function findInlineEntry(text: string, bodyStart: number, bodyEnd: number, key: 
   return null;
 }
 
+/** Whether a TOML assignment's value starts with a triple-quoted string. */
+function isMultilineTomlString(text: string, valueStart: number): boolean {
+  let start = valueStart;
+  while (text[start] === " " || text[start] === "\t") start++;
+  return text.startsWith('"""', start) || text.startsWith("'''", start);
+}
+
+/** Whether one field in a supported inline `multi_agent_v2` table is triple-quoted. */
+function hasInlineMultilineTomlString(text: string, assignment: InlineEntry, key: string): boolean {
+  let openIdx = assignment.valueStart;
+  while (text[openIdx] === " " || text[openIdx] === "\t") openIdx++;
+  if (text[openIdx] !== "{") return false;
+  const closeIdx = findInlineTableEnd(text, openIdx);
+  if (closeIdx === -1) return false;
+  const entry = findInlineEntry(text, openIdx + 1, closeIdx, key);
+  return entry !== null && isMultilineTomlString(text, entry.valueStart);
+}
+
 /**
  * Set or remove one scalar key inside a top-level TOML table, preserving every
  * other line byte-for-byte — including the existing value's trailing comment,
@@ -602,22 +835,19 @@ function editScalarInTable(content: string, table: string, key: string, encoded:
   for (let i = headerIdx + 1; i < lines.length; i++) {
     if (/^\s*\[/.test(lines[i])) { end = i; break; }
   }
-  const keyRe = new RegExp(`^(\\s*)${key}\\s*=\\s*`);
   for (let i = headerIdx + 1; i < end; i++) {
-    const m = lines[i].match(keyRe);
-    if (!m) continue;
+    const entry = findTomlAssignment(lines[i], key);
+    if (!entry) continue;
     // The existing value may itself contain '#', so scan the value token
     // string-aware instead of splitting on '#'.
     const line = lines[i];
-    const valueStart = m[0].length;
-    const valueEnd = scanTomlValueEnd(line, valueStart);
-    const trailing = line.slice(valueEnd);
+    const trailing = line.slice(entry.valueEnd);
     if (encoded === null) {
       lines.splice(i, 1);
       return applyEol(lines.join("\n"), eol);
     }
-    if (line.slice(valueStart, valueEnd).trim() === encoded) return content;
-    lines[i] = `${m[1]}${key} = ${encoded}${trailing}`;
+    if (line.slice(entry.valueStart, entry.valueEnd).trim() === encoded) return content;
+    lines[i] = `${line.slice(0, entry.keyStart)}${key} = ${encoded}${trailing}`;
     return applyEol(lines.join("\n"), eol);
   }
   if (encoded === null) return content;
@@ -626,14 +856,11 @@ function editScalarInTable(content: string, table: string, key: string, encoded:
 }
 
 /** Persist `[agents] enabled = value`, or remove the key when `value` is null. */
-export function setAgentsEnabled(value: boolean | null, configPath?: string): ConfigEditResult {
+export function setAgentsEnabled(value: boolean | null, configPath?: string, heldConfigWriteLock?: LockHandle): ConfigEditResult {
   const path = configPath ?? activeCodexConfigPath();
-  const content = readConfigText(path);
-  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
-  const next = editScalarInTable(content, "agents", "enabled", value === null ? null : String(value));
-  if (next === content) return { ok: true, changed: false };
-  atomicWriteFile(path, next);
-  return { ok: true, changed: true };
+  return editCodexConfigToml(path, content => ({
+    next: editScalarInTable(content, "agents", "enabled", value === null ? null : String(value)),
+  }), heldConfigWriteLock);
 }
 
 /**
@@ -643,17 +870,14 @@ export function setAgentsEnabled(value: boolean | null, configPath?: string): Co
  * produce a config upstream cannot deserialize, a hard parse failure for the
  * user's Codex.
  */
-export function setAgentsMaxDepth(value: number | null, configPath?: string): ConfigEditResult {
+export function setAgentsMaxDepth(value: number | null, configPath?: string, heldConfigWriteLock?: LockHandle): ConfigEditResult {
   if (value !== null && (!Number.isInteger(value) || value < -2_147_483_648 || value > 2_147_483_647)) {
     return { ok: false, error: "max_depth must be an integer within signed i32 range" };
   }
   const path = configPath ?? activeCodexConfigPath();
-  const content = readConfigText(path);
-  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
-  const next = editScalarInTable(content, "agents", "max_depth", value === null ? null : String(value));
-  if (next === content) return { ok: true, changed: false };
-  atomicWriteFile(path, next);
-  return { ok: true, changed: true };
+  return editCodexConfigToml(path, content => ({
+    next: editScalarInTable(content, "agents", "max_depth", value === null ? null : String(value)),
+  }), heldConfigWriteLock);
 }
 
 /**
@@ -669,29 +893,93 @@ export function setAgentsMaxDepth(value: number | null, configPath?: string): Co
  * Reads both the dedicated-table and inline forms; dedicated wins, mirroring
  * `getMaxConcurrentThreads` precedence.
  */
-export function getSubagentDeveloperInstructions(configPath?: string): string | null {
+/**
+ * Read a string-valued `features.multi_agent_v2` scalar (dedicated table or inline
+ * form; dedicated wins, mirroring `getMaxConcurrentThreads` precedence). Returns
+ * `null` when the key is absent or the config is unreadable. A present empty string
+ * round-trips faithfully — some upstream keys treat `""` and `null` differently.
+ */
+function getV2StringField(key: string, configPath?: string): string | null {
   const content = readConfigText(configPath);
   if (content === null) return null;
-  const table = tomlTableBody(content, "features.multi_agent_v2");
+  const table = tomlTableBodyForStringFields(content, "features.multi_agent_v2");
   if (table !== null) {
-    const m = table.match(/^\s*subagent_developer_instructions\s*=\s*/m);
-    if (m) {
-      const valueStart = m.index! + m[0].length;
-      const token = table.slice(valueStart, scanTomlValueEnd(table, valueStart)).trim();
+    const entry = findTomlAssignment(table, key);
+    if (entry) {
+      const token = table.slice(entry.valueStart, entry.valueEnd).trim();
       return decodeTomlStringToken(token);
     }
     return null;
   }
-  const features = tomlTableBody(content, "features");
+  const features = tomlTableBodyForStringFields(content, "features");
   if (features === null) return null;
-  const m = features.match(/multi_agent_v2\s*=\s*\{/);
-  if (!m) return null;
-  const openIdx = m.index! + m[0].length - 1;
+  const v2Entry = findTomlAssignment(features, "multi_agent_v2");
+  if (!v2Entry) return null;
+  let openIdx = v2Entry.valueStart;
+  while (features[openIdx] === " " || features[openIdx] === "\t") openIdx++;
+  if (features[openIdx] !== "{") return null;
   const closeIdx = findInlineTableEnd(features, openIdx);
   if (closeIdx === -1) return null;
-  const entry = findInlineEntry(features, openIdx + 1, closeIdx, "subagent_developer_instructions");
+  const entry = findInlineEntry(features, openIdx + 1, closeIdx, key);
   if (!entry) return null;
   return decodeTomlStringToken(features.slice(entry.valueStart, entry.valueEnd).trim());
+}
+
+/**
+ * A table body scanner that skips complete TOML values before recognizing the
+ * next header. Unlike the legacy line scanner, bracket-shaped prose inside a
+ * multi-line string cannot truncate the table.
+ */
+function tomlTableBodyForStringFields(content: string, header: string): string | null {
+  const escaped = escapeRegExp(header);
+  const match = new RegExp(`^\\s*\\[${escaped}\\]\\s*(?:#.*)?$`, "m").exec(content);
+  if (!match) return null;
+  const newline = content.indexOf("\n", match.index + match[0].length);
+  if (newline === -1) return "";
+  const bodyStart = newline + 1;
+  let lineStart = bodyStart;
+  while (lineStart < content.length) {
+    let cursor = lineStart;
+    while (content[cursor] === " " || content[cursor] === "\t") cursor++;
+    if (content[cursor] === "[") return content.slice(bodyStart, lineStart);
+    const lineEnd = content.indexOf("\n", cursor);
+    const boundedEnd = lineEnd === -1 ? content.length : lineEnd;
+    let keyEnd = cursor;
+    if (content[keyEnd] === '"' || content[keyEnd] === "'") {
+      keyEnd = scanTomlValueEnd(content, keyEnd);
+    } else {
+      const keyMatch = /^[A-Za-z0-9_.-]+/.exec(content.slice(keyEnd, boundedEnd));
+      if (keyMatch) keyEnd += keyMatch[0].length;
+    }
+    while (content[keyEnd] === " " || content[keyEnd] === "\t") keyEnd++;
+    if (content[keyEnd] === "=" && keyEnd < boundedEnd) {
+      const valueEnd = scanTomlValueEnd(content, keyEnd + 1);
+      const nextLine = content.indexOf("\n", valueEnd);
+      lineStart = nextLine === -1 ? content.length : nextLine + 1;
+    } else {
+      lineStart = lineEnd === -1 ? content.length : lineEnd + 1;
+    }
+  }
+  return content.slice(bodyStart);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Bare and quoted TOML forms of one known-safe key. */
+function tomlKeyPattern(key: string): string {
+  const escaped = escapeRegExp(key);
+  return `(?:${escaped}|"${escaped}"|'${escaped}')`;
+}
+
+export function getSubagentDeveloperInstructions(configPath?: string): string | null {
+  return getV2StringField("subagent_developer_instructions", configPath);
+}
+
+/** Current `features.multi_agent_v2.multi_agent_mode_hint_text`, or null when unset. */
+export function getMultiAgentModeHintText(configPath?: string): string | null {
+  return getV2StringField("multi_agent_mode_hint_text", configPath);
 }
 
 /**
@@ -705,17 +993,43 @@ export function getSubagentDeveloperInstructions(configPath?: string): string | 
  * carries `#[serde(deny_unknown_fields)]`, so a misspelling is not ignored — it is
  * a hard config-parse failure for the user's Codex.
  */
-export function setSubagentDeveloperInstructions(value: string | null, configPath?: string): ConfigEditResult {
+function setV2StringField(key: string, value: string | null, configPath?: string, heldConfigWriteLock?: LockHandle): ConfigEditResult {
   const path = configPath ?? activeCodexConfigPath();
-  const content = readConfigText(path);
-  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
   const encoded = value === null ? null : encodeTomlBasicString(value);
+  return editCodexConfigToml(path, (content): TomlEditOutcome => {
 
-  if (tomlTableBody(content, "features.multi_agent_v2") !== null) {
-    const next = editScalarInTable(content, "features.multi_agent_v2", "subagent_developer_instructions", encoded);
-    if (next === content) return { ok: true, changed: false };
-    atomicWriteFile(path, next);
-    return { ok: true, changed: true };
+  // A parsed V2 object without one of the supported source forms came from
+  // dotted/quoted path segments. Appending a dedicated table would redefine it
+  // and make Codex reject the file, so fail closed without changing any bytes.
+  const parsedFeatures = parsedTomlTable(content, "features");
+  const parsedV2 = parsedFeatures === null ? null : plainTomlRecord(parsedFeatures.multi_agent_v2);
+  const dedicatedV2 = tomlTableBodyForStringFields(content, "features.multi_agent_v2") !== null;
+  const featuresBody = tomlTableBodyForStringFields(content, "features");
+  const featuresV2Entry = featuresBody === null ? null : findTomlAssignment(featuresBody, "multi_agent_v2");
+  const supportedFeaturesEntry = featuresV2Entry !== null;
+  if (parsedV2 !== null && !dedicatedV2 && !supportedFeaturesEntry) {
+    return { error: "dotted or quoted multi_agent_v2 config is not supported for managed string fields" };
+  }
+
+  const dedicatedStringBody = tomlTableBodyForStringFields(content, "features.multi_agent_v2");
+  if (dedicatedStringBody !== null) {
+    // Multiline TOML strings ("""...""" / '''...''') span multiple lines and the
+    // single-line table editor cannot rewrite or remove them without corrupting
+    // the document. Scope this guard to the target V2 table so an unrelated
+    // table carrying the same key does not block an otherwise safe edit.
+    const dedicatedEntry = findTomlAssignment(dedicatedStringBody, key);
+    if (dedicatedEntry !== null && isMultilineTomlString(dedicatedStringBody, dedicatedEntry.valueStart)) {
+      return { error: `multi-line TOML string for ${key} is not editable; convert it to a single-line string first` };
+    }
+    const legacyDedicatedBody = tomlTableBody(content, "features.multi_agent_v2") ?? "";
+    if (dedicatedEntry !== null && findTomlAssignment(legacyDedicatedBody, key) === null) {
+      return { error: `cannot edit ${key} after a header-shaped multiline value safely` };
+    }
+    return { next: editScalarInTable(content, "features.multi_agent_v2", key, encoded) };
+  }
+
+  if (featuresBody !== null && featuresV2Entry !== null && hasInlineMultilineTomlString(featuresBody, featuresV2Entry, key)) {
+    return { error: `multi-line TOML string for ${key} is not editable; convert it to a single-line string first` };
   }
 
   const eol = dominantEol(content);
@@ -732,10 +1046,10 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
       if (inlineMatch) {
         const openIdx = inlineMatch[0].length - 1;
         const closeIdx = findInlineTableEnd(line, openIdx);
-        if (closeIdx === -1) return { ok: false, error: "malformed multi_agent_v2 inline table" };
-        const entry = findInlineEntry(line, openIdx + 1, closeIdx, "subagent_developer_instructions");
+        if (closeIdx === -1) return { error: "malformed multi_agent_v2 inline table" };
+        const entry = findInlineEntry(line, openIdx + 1, closeIdx, key);
         if (encoded === null) {
-          if (!entry) return { ok: true, changed: false };
+          if (!entry) return { next: content };
           let start = entry.keyStart;
           let stop = entry.valueEnd;
           let j = stop;
@@ -749,129 +1063,357 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
             if (line[k - 1] === ",") start = k - 1;
           }
           lines[i] = line.slice(0, start) + line.slice(stop);
-          atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-          return { ok: true, changed: true };
+          return { next: applyEol(lines.join("\n"), eol) };
         }
         if (entry) {
-          if (line.slice(entry.valueStart, entry.valueEnd).trim() === encoded) return { ok: true, changed: false };
+          if (line.slice(entry.valueStart, entry.valueEnd).trim() === encoded) return { next: content };
           lines[i] = line.slice(0, entry.valueStart) + encoded + line.slice(entry.valueEnd);
         } else {
           let insertPos = closeIdx;
           while (insertPos > openIdx + 1 && line[insertPos - 1] === " ") insertPos--;
           const hasEntries = line.slice(openIdx + 1, insertPos).trim().length > 0;
           const insertion = hasEntries
-            ? `, subagent_developer_instructions = ${encoded} `
-            : ` subagent_developer_instructions = ${encoded} `;
+            ? `, ${key} = ${encoded} `
+            : ` ${key} = ${encoded} `;
           lines[i] = line.slice(0, insertPos) + insertion + line.slice(closeIdx);
         }
-        atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-        return { ok: true, changed: true };
+        return { next: applyEol(lines.join("\n"), eol) };
       }
       const boolMatch = line.match(/^(\s*)multi_agent_v2\s*=\s*(true|false)(\s*(?:#.*)?)$/);
       if (boolMatch) {
-        if (encoded === null) return { ok: true, changed: false };
-        lines[i] = `${boolMatch[1]}multi_agent_v2 = { enabled = ${boolMatch[2]}, subagent_developer_instructions = ${encoded} }${boolMatch[3]}`;
-        atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-        return { ok: true, changed: true };
+        if (encoded === null) return { next: content };
+        lines[i] = `${boolMatch[1]}multi_agent_v2 = { enabled = ${boolMatch[2]}, ${key} = ${encoded} }${boolMatch[3]}`;
+        return { next: applyEol(lines.join("\n"), eol) };
       }
+    }
+    if (featuresV2Entry !== null) {
+      return { error: "multi_agent_v2 inside a multiline [features] table is not editable safely" };
     }
   }
 
-  if (encoded === null) return { ok: true, changed: false };
+  if (encoded === null) return { next: content };
   const suffix = content.endsWith("\n") || content.length === 0 ? "" : eol;
   const separator = content.length > 0 && !content.endsWith(`${eol}${eol}`) ? eol : "";
-  const tableText = `[features.multi_agent_v2]${eol}subagent_developer_instructions = ${encoded}${eol}`;
-  atomicWriteFile(path, `${content}${suffix}${separator}${tableText}`);
-  return { ok: true, changed: true };
+  const tableText = `[features.multi_agent_v2]${eol}${key} = ${encoded}${eol}`;
+  return { next: `${content}${suffix}${separator}${tableText}` };
+  }, heldConfigWriteLock);
+}
+
+export function setSubagentDeveloperInstructions(value: string | null, configPath?: string, heldConfigWriteLock?: LockHandle): ConfigEditResult {
+  return setV2StringField("subagent_developer_instructions", value, configPath, heldConfigWriteLock);
+}
+
+export const MODE_HINT_UNSUPPORTED_ERROR =
+  "installed Codex does not support multi_agent_mode_hint_text; update Codex first";
+
+/**
+ * Persist `features.multi_agent_v2.multi_agent_mode_hint_text`, or remove the key
+ * when `value` is null. Same encoding coverage and upstream-name discipline as
+ * `setSubagentDeveloperInstructions`; the upstream struct rejects unknown fields,
+ * so the key spelling must match codex-rs exactly.
+ */
+export function setMultiAgentModeHintText(value: string | null, configPath?: string, heldConfigWriteLock?: LockHandle): ConfigEditResult {
+  // The upstream `multi_agent_mode_hint_text` key is newer than the v2 config
+  // surface opencodex already manages; an older Codex build rejects the unknown
+  // member (`#[serde(deny_unknown_fields)]`) and fails to start. Probe the
+  // installed runtime binary for the key string and refuse the write when the
+  // binary provably lacks it. A probe that cannot run (missing binary,
+  // unreadable file) does not block: that is the test/hermetic path and the
+  // headless runtime fallback.
+  if (value !== null) {
+    const probe = probeCodexSupportsModeHint();
+    if (probe === false) {
+      return {
+        ok: false,
+        error: MODE_HINT_UNSUPPORTED_ERROR,
+      };
+    }
+  }
+  const canonicalValue = value === null ? null : canonicalizeOpenCodexModeHint(value);
+  return setV2StringField("multi_agent_mode_hint_text", canonicalValue, configPath, heldConfigWriteLock);
+}
+
+export const MODE_HINT_CAPABILITY_CACHE_MAX_ENTRIES = 8;
+export const modeHintCapabilityCache = new Map<string, boolean | null>();
+
+export function rememberModeHintCapability(cacheKey: string, capability: boolean | null): void {
+  modeHintCapabilityCache.delete(cacheKey);
+  modeHintCapabilityCache.set(cacheKey, capability);
+  while (modeHintCapabilityCache.size > MODE_HINT_CAPABILITY_CACHE_MAX_ENTRIES) {
+    const oldest = modeHintCapabilityCache.keys().next().value;
+    if (oldest === undefined) break;
+    modeHintCapabilityCache.delete(oldest);
+  }
+}
+
+/**
+ * True when the installed Codex runtime binary contains the
+ * `multi_agent_mode_hint_text` config key, false when it provably does not, and
+ * null when the probe could not run (missing binary, unreadable file).
+ */
+export function probeCodexSupportsModeHint(): boolean | null {
+  try {
+    const runtime = resolveAndPersistCodexRuntime({ env: process.env }).runtime;
+    const selectedPath = resolveSelectedCommandPath(runtime.command);
+    let selectedIdentity = selectedPath ?? "";
+    try { if (selectedPath) selectedIdentity = realpathSync.native(selectedPath); } catch { /* keep lexical path */ }
+    const candidates = codexNativeBinaryCandidates(runtime.command);
+    const binaryStatFingerprint = candidates.map(candidate => {
+      try {
+        const stat = statSync(candidate);
+        return `${candidate}\0${stat.dev}\0${stat.ino}\0${stat.size}\0${stat.mtimeMs}\0${stat.ctimeMs}`;
+      } catch {
+        return `${candidate}\0missing`;
+      }
+    }).join("\0");
+    const cacheKey = `${runtime.command}\0${runtime.version ?? ""}\0${selectedIdentity}\0${binaryStatFingerprint}`;
+    const cached = modeHintCapabilityCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    let sawBinary = false;
+    for (const candidate of candidates) {
+      try {
+        if (!existsSync(candidate)) continue;
+        const buf = readFileSync(candidate);
+        if (!isNativeExecutable(buf)) continue;
+        sawBinary = true;
+        if (buf.includes(Buffer.from("multi_agent_mode_hint_text", "utf8"))) {
+          rememberModeHintCapability(cacheKey, true);
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    // At least one real binary was inspected and none contained the key.
+    const result = sawBinary ? false : null;
+    rememberModeHintCapability(cacheKey, result);
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+const CODEX_PLATFORM_PACKAGES = [
+  ["codex-darwin-arm64", "aarch64-apple-darwin", "codex"],
+  ["codex-darwin-x64", "x86_64-apple-darwin", "codex"],
+  ["codex-linux-x64", "x86_64-unknown-linux-musl", "codex"],
+  ["codex-linux-arm64", "aarch64-unknown-linux-musl", "codex"],
+  ["codex-win32-x64", "x86_64-pc-windows-msvc", "codex.exe"],
+  ["codex-win32-arm64", "aarch64-pc-windows-msvc", "codex.exe"],
+] as const;
+
+function isNativeExecutable(buf: Buffer): boolean {
+  if (buf.length < 4) return false;
+  if (buf[0] === 0x4d && buf[1] === 0x5a) return true; // PE/COFF
+  const magic = buf.readUInt32BE(0);
+  return magic === 0x7f454c46 // ELF
+    || magic === 0xfeedface || magic === 0xfeedfacf
+    || magic === 0xcefaedfe || magic === 0xcffaedfe
+    || magic === 0xcafebabe || magic === 0xbebafeca; // Mach-O/fat Mach-O
+}
+
+/**
+ * Candidate native codex binaries to probe. The resolved `command` may be the
+ * opencodex shim or the npm JS wrapper (`codex.opencodex-real`), neither of
+ * which embeds the Rust config schema. The real binary ships under the
+ * platform package's `vendor/<triple>/bin/codex`; also try adjacent wrappers.
+ */
+function codexNativeBinaryCandidates(command: string): string[] {
+  const out = new Set<string>();
+  const resolverBases = new Set<string>();
+  const selectedPath = resolveSelectedCommandPath(command);
+
+  const addSelectedTarget = (target: string) => {
+    try {
+      const real = realpathSync.native(target);
+      out.add(target);
+      out.add(real);
+      if (/[\\/]@openai[\\/]codex[\\/]bin[\\/]/.test(real)) resolverBases.add(real);
+    } catch {
+      // Missing backing paths cannot establish capability either way.
+    }
+  };
+
+  // Follow the resolved command to its real location. The opencodex shim and
+  // the npm JS wrapper resolve to `@openai/codex/bin/codex.js`; the native
+  // binary lives in the sibling platform package's vendor directory.
+  if (selectedPath) {
+    addSelectedTarget(selectedPath);
+    for (const target of selectedShimBackingPaths(selectedPath)) addSelectedTarget(target);
+  }
+
+  // npm's Windows wrappers are ordinary scripts. Resolve from both the global
+  // prefix layout and a project-local node_modules/.bin layout; createRequire
+  // then follows the selected installation's own dependency tree (including
+  // pnpm/nested optional dependencies) without consulting unrelated PATH bins.
+  const wrapperPath = selectedPath ?? command;
+  if (/\.(?:cmd|ps1)$/i.test(wrapperPath)) {
+    resolverBases.add(resolve(dirname(wrapperPath), "node_modules", "@openai", "codex", "bin", "codex.js"));
+    resolverBases.add(resolve(dirname(wrapperPath), "..", "@openai", "codex", "bin", "codex.js"));
+  }
+
+  for (const base of resolverBases) {
+    const requireFromSelected = createRequire(base);
+    for (const [pkg, triple, exe] of CODEX_PLATFORM_PACKAGES) {
+      try {
+        const manifest = requireFromSelected.resolve(`@openai/${pkg}/package.json`);
+        out.add(join(dirname(manifest), "vendor", triple, "bin", exe));
+      } catch {
+        // Optional platform packages for other targets are normally absent.
+      }
+    }
+  }
+  return [...out];
+}
+
+/** Backing paths tied to this exact OCX shim entry in codex-shim.json. */
+function selectedShimBackingPaths(commandPath: string): string[] {
+  try {
+    const configDir = getConfigDir();
+    const state = JSON.parse(readFileSync(join(configDir, "codex-shim.json"), "utf8")) as {
+      schema?: unknown;
+      mode?: unknown;
+      wrapperPath?: unknown;
+      originalPath?: unknown;
+      backupPath?: unknown;
+      realPath?: unknown;
+      wrappers?: Array<Record<string, unknown>>;
+    };
+    const overlay = decodeOverlayState(state, configDir);
+    if (overlay) return resolve(overlay.wrapperPath) === resolve(commandPath) ? [overlay.launcherPath] : [];
+    if (state.schema !== undefined || state.mode !== undefined) return [];
+    const entries = Array.isArray(state.wrappers) && state.wrappers.length > 0 ? state.wrappers : [state];
+    const selected = resolve(commandPath);
+    for (const entry of entries) {
+      if (typeof entry.wrapperPath !== "string" || resolve(entry.wrapperPath) !== selected) continue;
+      return [entry.backupPath, entry.realPath, entry.originalPath]
+        .filter((value): value is string => typeof value === "string" && value.length > 0 && resolve(value) !== selected);
+    }
+  } catch {
+    // Not an OCX-owned shim, or no readable state.
+  }
+  return [];
+}
+
+/** Resolve only the selected bare command against PATH; never enumerate peers. */
+function resolveSelectedCommandPath(command: string): string | null {
+  if (command.includes("/") || command.includes("\\")) return existsSync(command) ? resolve(command) : null;
+  for (const dir of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
+    const candidate = join(dir, command);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 function editAgentsMaxThreads(value: number | null, configPath?: string, migratedComment?: string): ConfigEditResult {
   const path = configPath ?? activeCodexConfigPath();
-  const content = readConfigText(path);
-  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
-  const eol = dominantEol(content);
-  const lines = content.split(/\r?\n/);
-  const headerIdx = lines.findIndex(l => /^\s*\[agents\]\s*(?:#.*)?$/.test(l));
-  if (headerIdx === -1) {
-    if (value === null) return { ok: true, changed: false };
-    const separator = lines.length > 0 && lines[lines.length - 1] !== "" ? [""] : [];
-    lines.push(...separator, "[agents]", `max_threads = ${value}${migratedComment ?? ""}`);
-    atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-    return { ok: true, changed: true };
+  return editCodexConfigToml(path, (content): TomlEditOutcome => {
+    const eol = dominantEol(content);
+    const { lines, headerIdx, entries } = agentsThreadLimitEntries(content);
+    if (headerIdx === -1) {
+      if (value === null) return { next: content };
+      const separator = content.length > 0 && !content.endsWith("\n") ? eol : "";
+      return { next: `${content}${separator}${eol}[agents]${eol}${AGENTS_THREAD_LIMIT_KEY} = ${value}${migratedComment ?? ""}${eol}` };
+    }
+    const selected = entries.find(entry => entry.key === AGENTS_THREAD_LIMIT_KEY) ?? entries[0];
+    if (entries.length === 1 && selected?.key === AGENTS_THREAD_LIMIT_KEY && selected.value === value
+      && value !== null && mergeTrailingComments(selected.comment, migratedComment) === (selected.comment ?? "")) return { next: content };
+    let comment = selected?.comment;
+    for (const entry of entries) comment = mergeTrailingComments(comment, entry.comment);
+    comment = mergeTrailingComments(comment, migratedComment);
+    for (const entry of [...entries].reverse()) {
+      if (value !== null && entry === selected) {
+        const line = lines[entry.index]!;
+        line.text = `${line.text.match(/^\s*/)?.[0] ?? ""}${AGENTS_THREAD_LIMIT_KEY} = ${value}${comment}`;
+      } else lines.splice(entry.index, 1);
+    }
+    if (value !== null && !selected) {
+      if (!lines[headerIdx]!.eol) lines[headerIdx]!.eol = eol;
+      lines.splice(headerIdx + 1, 0, { text: `${AGENTS_THREAD_LIMIT_KEY} = ${value}${comment}`, eol, structural: true });
+    }
+    return { next: sourceText(lines) };
+  });
+}
+
+/** Only structural assignments in the supported agents table are editable. */
+function agentsThreadLimitEntries(content: string) {
+  const lines = splitSourceLines(content);
+  const headerIdx = lines.findIndex(line => line.structural && /^\s*\[agents\]\s*(?:#.*)?$/.test(line.text));
+  const entries: Array<{ index: number; key: string; value: number | null; comment?: string; editable: boolean }> = [];
+  if (headerIdx !== -1) {
+    for (let index = headerIdx + 1; index < lines.length; index++) {
+      const line = lines[index]!;
+      if (!line.structural) continue;
+      if (/^\s*\[/.test(line.text)) break;
+      const key = rootAssignmentKey(line.text);
+      if (key !== AGENTS_THREAD_LIMIT_KEY && key !== LEGACY_AGENTS_THREAD_LIMIT_KEY) continue;
+      const assignment = findTomlAssignment(line.text, key);
+      const editable = assignment !== null && (index + 1 === lines.length || lines[index + 1]!.structural);
+      let value: unknown;
+      try { value = (Bun.TOML.parse(line.text) as Record<string, unknown>)[key]; } catch {
+        // Match the reader's large-integer fallback without widening edit syntax.
+        const integer = assignment && /^\d+$/.exec(line.text.slice(assignment.valueStart, assignment.valueEnd).trim());
+        if (integer) value = Number(integer[0]);
+      }
+      entries.push({ index, key, editable, value: typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null,
+        comment: assignment ? line.text.slice(assignment.valueEnd).match(/\s*#.*$/)?.[0] : undefined });
+    }
   }
-  let end = lines.length;
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    if (/^\s*\[/.test(lines[i])) { end = i; break; }
-  }
-  const keyRe = /^(\s*)max_threads\s*=\s*(\d+)(\s*#.*)?$/;
-  for (let i = headerIdx + 1; i < end; i++) {
-    const m = lines[i].match(keyRe);
-    if (!m) continue;
-    if (value === null) lines.splice(i, 1);
-    else if (Number(m[2]) === value && (!migratedComment || migratedComment === m[3])) return { ok: true, changed: false };
-    else lines[i] = `${m[1]}max_threads = ${value}${mergeTrailingComments(m[3], migratedComment)}`;
-    atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-    return { ok: true, changed: true };
-  }
-  if (value === null) return { ok: true, changed: false };
-  lines.splice(headerIdx + 1, 0, `max_threads = ${value}${migratedComment ?? ""}`);
-  atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-  return { ok: true, changed: true };
+  return { lines, headerIdx, entries };
 }
 
 function removeMaxConcurrentThreads(configPath?: string): ConfigEditResult {
   const path = configPath ?? activeCodexConfigPath();
-  const content = readConfigText(path);
-  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
-  const eol = dominantEol(content);
-  const lines = content.split(/\r?\n/);
-  const headerIdx = lines.findIndex(l => /^\s*\[features\.multi_agent_v2\]\s*(?:#.*)?$/.test(l));
-  if (headerIdx !== -1) {
-    let end = lines.length;
-    for (let i = headerIdx + 1; i < lines.length; i++) {
-      if (/^\s*\[/.test(lines[i])) { end = i; break; }
+  return editCodexConfigToml(path, (content): TomlEditOutcome => {
+    const eol = dominantEol(content);
+    const lines = content.split(/\r?\n/);
+    const headerIdx = lines.findIndex(l => /^\s*\[features\.multi_agent_v2\]\s*(?:#.*)?$/.test(l));
+    if (headerIdx !== -1) {
+      let end = lines.length;
+      for (let i = headerIdx + 1; i < lines.length; i++) {
+        if (/^\s*\[/.test(lines[i])) { end = i; break; }
+      }
+      const keyIdx = lines.findIndex((line, i) => i > headerIdx && i < end && /^\s*max_concurrent_threads_per_session\s*=/.test(line));
+      if (keyIdx !== -1) {
+        lines.splice(keyIdx, 1);
+        return { next: applyEol(lines.join("\n"), eol) };
+      }
     }
-    const keyIdx = lines.findIndex((line, i) => i > headerIdx && i < end && /^\s*max_concurrent_threads_per_session\s*=/.test(line));
-    if (keyIdx !== -1) {
-      lines.splice(keyIdx, 1);
-      atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-      return { ok: true, changed: true };
+    const featuresHeader = lines.findIndex(l => /^\s*\[features\]\s*(?:#.*)?$/.test(l));
+    if (featuresHeader === -1) return { next: content };
+    let featuresEnd = lines.length;
+    for (let i = featuresHeader + 1; i < lines.length; i++) {
+      if (/^\s*\[/.test(lines[i])) { featuresEnd = i; break; }
     }
-  }
-  const featuresHeader = lines.findIndex(l => /^\s*\[features\]\s*(?:#.*)?$/.test(l));
-  if (featuresHeader === -1) return { ok: true, changed: false };
-  let featuresEnd = lines.length;
-  for (let i = featuresHeader + 1; i < lines.length; i++) {
-    if (/^\s*\[/.test(lines[i])) { featuresEnd = i; break; }
-  }
-  const inlineRe = /^(\s*)multi_agent_v2\s*=\s*\{([^}]*)\}(\s*#.*)?$/;
-  for (let i = featuresHeader + 1; i < featuresEnd; i++) {
-    const inline = lines[i].match(inlineRe);
-    if (!inline || !/(?:^|,)\s*max_concurrent_threads_per_session\s*=/.test(inline[2])) continue;
-    const body = inline[2]
-      .replace(/^\s*max_concurrent_threads_per_session\s*=\s*\d+\s*,?\s*/, "")
-      .replace(/,\s*max_concurrent_threads_per_session\s*=\s*\d+\s*(?=,|$)/, "")
-      .trim();
-    lines[i] = `${inline[1]}multi_agent_v2 = { ${body} }${inline[3] ?? ""}`;
-    atomicWriteFile(path, applyEol(lines.join("\n"), eol));
-    return { ok: true, changed: true };
-  }
-  return { ok: true, changed: false };
+    const inlineRe = /^(\s*)multi_agent_v2\s*=\s*\{([^}]*)\}(\s*#.*)?$/;
+    for (let i = featuresHeader + 1; i < featuresEnd; i++) {
+      const inline = lines[i].match(inlineRe);
+      if (!inline || !/(?:^|,)\s*max_concurrent_threads_per_session\s*=/.test(inline[2])) continue;
+      const body = inline[2]
+        .replace(/^\s*max_concurrent_threads_per_session\s*=\s*\d+\s*,?\s*/, "")
+        .replace(/,\s*max_concurrent_threads_per_session\s*=\s*\d+\s*(?=,|$)/, "")
+        .trim();
+      lines[i] = `${inline[1]}multi_agent_v2 = { ${body} }${inline[3] ?? ""}`;
+      return { next: applyEol(lines.join("\n"), eol) };
+    }
+    return { next: content };
+  });
 }
 
 function ensureDisabledV2Config(value: number | null, configPath?: string, migratedComment?: string): ConfigEditResult {
   const path = configPath ?? activeCodexConfigPath();
-  const content = readConfigText(path);
-  if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
-  if (tomlTableBody(content, "features.multi_agent_v2") !== null || tomlTableBody(content, "features")?.match(/^\s*multi_agent_v2\s*=/m)) {
-    if (value === null) return { ok: true, changed: false };
-    return setMaxConcurrentThreads(value, path, migratedComment);
-  }
-  const eol = dominantEol(content);
-  const suffix = content.endsWith("\n") || content.length === 0 ? "" : eol;
-  const table = `[features.multi_agent_v2]${eol}enabled = false${value === null ? "" : `${eol}max_concurrent_threads_per_session = ${value}${migratedComment ?? ""}`}${eol}`;
-  atomicWriteFile(path, `${content}${suffix}${content.length > 0 && !content.endsWith(`${eol}${eol}`) ? eol : ""}${table}`);
-  return { ok: true, changed: true };
+  return editCodexConfigToml(path, (content): TomlEditOutcome => {
+    if (tomlTableBody(content, "features.multi_agent_v2") !== null || tomlTableBody(content, "features")?.match(/^\s*multi_agent_v2\s*=/m)) {
+      if (value === null) return { next: content };
+      // The content-level edit, not the exported writer: this section already
+      // holds `path`'s write lock and a nested acquire would refuse itself.
+      return maxConcurrentThreadsEdit(content, value, migratedComment);
+    }
+    const eol = dominantEol(content);
+    const suffix = content.endsWith("\n") || content.length === 0 ? "" : eol;
+    const table = `[features.multi_agent_v2]${eol}enabled = false${value === null ? "" : `${eol}max_concurrent_threads_per_session = ${value}${migratedComment ?? ""}`}${eol}`;
+    return { next: `${content}${suffix}${content.length > 0 && !content.endsWith(`${eol}${eol}`) ? eol : ""}${table}` };
+  });
 }
 
 /**
@@ -922,7 +1464,9 @@ function discoverStoredThreadLimit(configPath?: string): { value: number; units:
 }
 
 function activeThreadComment(content: string, v2Enabled: boolean): string | undefined {
-  const legacy = tomlTableBody(content, "agents")?.match(/^\s*max_threads\s*=\s*\d+(\s*#.*)$/m)?.[1];
+  const entries = agentsThreadLimitEntries(content).entries;
+  let legacy = (entries.find(entry => entry.key === AGENTS_THREAD_LIMIT_KEY) ?? entries[0])?.comment;
+  for (const entry of entries) legacy = mergeTrailingComments(legacy, entry.comment) || undefined;
   const dedicated = tomlTableBody(content, "features.multi_agent_v2")
     ?.match(/^\s*max_concurrent_threads_per_session\s*=\s*\d+(\s*#.*)$/m)?.[1];
   const features = tomlTableBody(content, "features");
@@ -941,7 +1485,16 @@ export function isAtomicResidualError(error: unknown): boolean {
   return error instanceof AtomicWriteResidualTempError || error instanceof AtomicWriteSecretResidualError;
 }
 
-function applyConfigEditsAtomically(path: string, edit: (tempPath: string) => ConfigEditResult): ConfigEditResult {
+/**
+ * Stage the temp-copy edits then swap `path` in one pass.
+ *
+ * Caller must already hold `path`'s config write lock —
+ * `transitionMultiAgentV2` is that caller, and it holds the lock across the
+ * whole migration so a foreign write cannot land between its stages or be
+ * discarded by the byte-restore rollback. The per-call edits inside run on the
+ * temp path, which takes its own lock harmlessly.
+ */
+function applyConfigEditsAtomically(path: string, held: LockHandle, edit: (tempPath: string) => ConfigEditResult): ConfigEditResult {
   const content = readConfigText(path);
   if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
   const tempPath = `${path}.ocx-migration.${process.pid}.${++migrationEditSeq}`;
@@ -955,7 +1508,7 @@ function applyConfigEditsAtomically(path: string, edit: (tempPath: string) => Co
     const edited = readConfigText(tempPath);
     if (edited === null) return { ok: false, error: "temporary config migration output is unreadable" };
     if (edited === content) return { ok: true, changed: false };
-    atomicWriteFile(path, edited);
+    publishConfigWrite(path, held, (destination, hooks) => atomicWriteFile(destination, edited, undefined, hooks));
     return { ok: true, changed: true };
   } catch (error) {
     if (isAtomicResidualError(error)) innerResidual = true;
@@ -975,10 +1528,10 @@ function applyConfigEditsAtomically(path: string, edit: (tempPath: string) => Co
 
 export type MultiAgentV2TransitionResult =
   | { ok: true; changed: boolean; threadLimit: number | null }
-  | { ok: false; error: string };
+  | { ok: false; error: string; retryable?: boolean };
 
-function transitionConfigError(content: string): string | null {
-  if (/^\s*(?:features\.multi_agent_v2(?:\.[A-Za-z0-9_]+)?|agents\.max_threads)\s*=/m.test(content)) {
+function transitionConfigError(content: string, explicitThreadLimit: boolean): string | null {
+  if (/^\s*(?:features\.multi_agent_v2(?:\.[A-Za-z0-9_]+)?|agents\.(?:max_threads|max_concurrent_threads_per_session))\s*=/m.test(content)) {
     return "dotted multi-agent config keys are not supported for automatic migration";
   }
   const dedicatedTables = content.match(/^\s*\[features\.multi_agent_v2\]\s*(?:#.*)?$/gm) ?? [];
@@ -995,9 +1548,18 @@ function transitionConfigError(content: string): string | null {
   if (features && /^\s*multi_agent_v2\.(?:enabled|max_concurrent_threads_per_session)\s*=/m.test(features)) {
     return "dotted multi_agent_v2 fields are not supported for automatic migration";
   }
-  const agents = tomlTableBody(content, "agents");
-  if ((agents?.match(/^\s*max_threads\s*=/gm) ?? []).length > 1) {
-    return "duplicate agents.max_threads definitions cannot be migrated safely";
+  const entries = agentsThreadLimitEntries(content).entries;
+  const parsedAgents = parsedTomlTable(content, "agents");
+  for (const key of [AGENTS_THREAD_LIMIT_KEY, LEGACY_AGENTS_THREAD_LIMIT_KEY]) {
+    const matches = entries.filter(entry => entry.key === key);
+    if (matches.length > 1) return `duplicate agents.${key} definitions cannot be migrated safely`;
+    if (parsedAgents && Object.hasOwn(parsedAgents, key) && matches.length === 0) {
+      return "unsupported agents thread-limit storage cannot be migrated safely";
+    }
+  }
+  if (entries.some(entry => !entry.editable)) return "unsupported agents thread-limit value cannot be migrated safely";
+  if (!explicitThreadLimit && (entries.some(entry => entry.value === null) || (entries.length === 2 && entries[0]!.value !== entries[1]!.value))) {
+    return "conflicting or invalid agents thread-limit aliases require an explicit thread limit";
   }
   const dedicated = tomlTableBody(content, "features.multi_agent_v2");
   if ((dedicated?.match(/^\s*max_concurrent_threads_per_session\s*=/gm) ?? []).length > 1) {
@@ -1009,20 +1571,22 @@ function transitionConfigError(content: string): string | null {
 /**
  * Toggle native multi_agent_v2 while moving the active thread limit to the key
  * valid for the destination version. Any failed command/postcondition restores
- * the exact original config bytes.
+ * the exact original config bytes; alias drift restores only the locked canonical target.
  */
 export function transitionMultiAgentV2(
   enabled: boolean,
-  toggleFeature: (enabled: boolean) => void,
-  options: { configPath?: string; threadLimit?: number } = {},
+  toggleFeature: (enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void,
+  options: { configPath?: string; threadLimit?: number; heldConfigWriteLock?: LockHandle } = {},
 ): MultiAgentV2TransitionResult {
-  if (options.threadLimit !== undefined && (!Number.isInteger(options.threadLimit) || options.threadLimit < 1)) {
-    return { ok: false, error: "thread limit must be an integer >= 1" };
+  if (options.threadLimit !== undefined && (!Number.isSafeInteger(options.threadLimit) || options.threadLimit < 1)) {
+    return { ok: false, error: "thread limit must be a safe integer >= 1" };
   }
   const path = options.configPath ?? activeCodexConfigPath();
+  if (codexHomeIsAbsent(dirname(path))) return { ok: false, error: `config.toml not readable at ${path}` };
+  const runTransition = (held: LockHandle): MultiAgentV2TransitionResult => {
   const original = readConfigText(path);
   if (original === null) return { ok: false, error: `config.toml not readable at ${path}` };
-  const preflightError = transitionConfigError(original);
+  const preflightError = transitionConfigError(original, options.threadLimit !== undefined);
   if (preflightError) return { ok: false, error: preflightError };
   const beforeEnabled = isMultiAgentV2Enabled(path);
   // A caller-supplied limit is already in the DESTINATION backend's units and is
@@ -1045,47 +1609,64 @@ export function transitionMultiAgentV2(
       ? v1ChildLimitToV2TotalLimit(discovered.value)
       : v2TotalLimitToV1ChildLimit(discovered.value);
   }
+  if (threadLimit !== null && !Number.isSafeInteger(threadLimit)) {
+    return { ok: false, error: "stored thread limit cannot be written safely; supply an explicit safe integer limit" };
+  }
   const migratedComment = activeThreadComment(original, beforeEnabled);
   try {
-    if (enabled) {
-      if (!beforeEnabled) {
-        const staged = applyConfigEditsAtomically(path, tempPath => {
-          const v2 = ensureDisabledV2Config(threadLimit, tempPath, migratedComment);
+    return withConfigWriteRecovery(path, held, () => {
+      if (beforeEnabled !== enabled) assertNativeConfigWriteDestination(path, held);
+      if (enabled) {
+        if (!beforeEnabled) {
+          const staged = applyConfigEditsAtomically(path, held, tempPath => {
+            const v2 = ensureDisabledV2Config(threadLimit, tempPath, migratedComment);
+            if (!v2.ok) return v2;
+            return editAgentsMaxThreads(null, tempPath);
+          });
+          if (!staged.ok) throw new Error(staged.error);
+          runConfigWriteChild(path, held, (env, validate) => toggleFeature(true, env, validate));
+        }
+        if (!isMultiAgentV2Enabled(path)) throw new Error("codex feature command did not enable multi_agent_v2");
+        const target = applyConfigEditsAtomically(path, held, tempPath => {
+          const v2 = threadLimit === null
+            ? removeMaxConcurrentThreads(tempPath)
+            : setMaxConcurrentThreads(threadLimit, tempPath, migratedComment);
           if (!v2.ok) return v2;
           return editAgentsMaxThreads(null, tempPath);
         });
-        if (!staged.ok) throw new Error(staged.error);
-        toggleFeature(true);
+        if (!target.ok) throw new Error(target.error);
+        if (hasAgentsMaxThreads(path) || getMaxConcurrentThreads(path) !== threadLimit) throw new Error("v2 thread-limit migration postcondition failed");
+      } else {
+        if (beforeEnabled) runConfigWriteChild(path, held, (env, validate) => toggleFeature(false, env, validate));
+        if (isMultiAgentV2Enabled(path)) throw new Error("codex feature command did not disable multi_agent_v2");
+        const target = applyConfigEditsAtomically(path, held, tempPath => {
+          const v2 = removeMaxConcurrentThreads(tempPath);
+          if (!v2.ok) return v2;
+          return editAgentsMaxThreads(threadLimit, tempPath, migratedComment);
+        });
+        if (!target.ok) throw new Error(target.error);
+        const agents = parsedTomlTable(readConfigText(path) ?? "", "agents");
+        if (getMaxConcurrentThreads(path) !== null || getAgentsMaxThreads(path) !== threadLimit || (agents && Object.hasOwn(agents, LEGACY_AGENTS_THREAD_LIMIT_KEY))) throw new Error("v1 thread-limit migration postcondition failed");
       }
-      if (!isMultiAgentV2Enabled(path)) throw new Error("codex feature command did not enable multi_agent_v2");
-      const target = applyConfigEditsAtomically(path, tempPath => {
-        const v2 = threadLimit === null
-          ? removeMaxConcurrentThreads(tempPath)
-          : setMaxConcurrentThreads(threadLimit, tempPath, migratedComment);
-        if (!v2.ok) return v2;
-        return editAgentsMaxThreads(null, tempPath);
-      });
-      if (!target.ok) throw new Error(target.error);
-      if (hasAgentsMaxThreads(path) || getMaxConcurrentThreads(path) !== threadLimit) throw new Error("v2 thread-limit migration postcondition failed");
-    } else {
-      if (beforeEnabled) toggleFeature(false);
-      if (isMultiAgentV2Enabled(path)) throw new Error("codex feature command did not disable multi_agent_v2");
-      const target = applyConfigEditsAtomically(path, tempPath => {
-        const v2 = removeMaxConcurrentThreads(tempPath);
-        if (!v2.ok) return v2;
-        return editAgentsMaxThreads(threadLimit, tempPath, migratedComment);
-      });
-      if (!target.ok) throw new Error(target.error);
-      if (getMaxConcurrentThreads(path) !== null || getAgentsMaxThreads(path) !== threadLimit) throw new Error("v1 thread-limit migration postcondition failed");
-    }
-    return { ok: true, changed: readConfigText(path) !== original, threadLimit };
+      return { ok: true, changed: readConfigText(path) !== original, threadLimit };
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    try {
-      atomicWriteFile(path, original);
-      return { ok: false, error: message };
-    } catch (rollbackErr) {
-      return { ok: false, error: `${message}; rollback failed: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}` };
-    }
+    if (err instanceof ConfigWriteDestinationChanged) return { ok: false, error: message, retryable: false };
+    return { ok: false, error: message };
   }
+  };
+  /*
+   * The whole migration — staged edits, the codex-features subprocess, the
+   * postcondition checks, and a possible byte-restore rollback — runs under
+   * `path`'s write lock. A foreign write that could once land between stages
+   * is now refused instead of silently surviving into the rolled-back bytes.
+   *
+   * A caller that already holds the lock (the injector, whose wider section
+   * must also cover the artifact commit) passes its handle: re-acquiring the
+   * same lock file would refuse itself.
+   */
+  const locked = withConfigWriteLockHeld(path, options.heldConfigWriteLock, runTransition);
+  if (!locked.ok) return { ok: false, error: configWriteLockFailureMessage(locked), ...(locked.error === "unsafe" ? { retryable: false } : {}) };
+  return locked.value;
 }

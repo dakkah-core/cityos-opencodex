@@ -2,15 +2,29 @@ import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../../l
 import type { UsageSummary } from "../../usage/summary";
 
 export type CachedUsageSummary = UsageSummary & {
+  usageIncomplete?: true;
+  usageIncompleteReason?: "oversized_rows";
   historyTruncated: boolean;
   truncatedPrefixBytes: number;
   entriesTruncated: boolean;
   entriesDropped: number;
+  snapshotWindowStart: number | null;
+  snapshotWindowEnd: number | null;
 };
 
-interface UsageSummaryCacheEntry {
+export interface UsageSummaryCacheEntry {
   revisionKey: string;
+  /** path/dev/ino/birthtime only; appends keep this stable. */
+  identityKey: string;
+  maxReadBytes: number;
+  /** userCostOverlayVersion() when the summary was computed; overlay edits invalidate the entry. */
+  overlayVersion: number;
+  /** Local calendar zone used to build day/range buckets. */
+  timeZone: string;
   expiresAt: number;
+  /** Generation freshness: ignore size/mtime until this instant. */
+  freshUntil: number;
+  lastSeenSize: number;
   summary: CachedUsageSummary;
   revisionReadAt: number;
   sizeBytes: number;

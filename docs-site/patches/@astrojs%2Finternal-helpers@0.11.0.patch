@@ -1,0 +1,71 @@
+diff --git a/dist/frontmatter.js b/dist/frontmatter.js
+index d2e0fe9ba..9cce7657f 100644
+--- a/dist/frontmatter.js
++++ b/dist/frontmatter.js
+@@ -1,4 +1,4 @@
+-import * as yaml from "js-yaml";
++import * as yaml from "./yaml.js";
+ import * as toml from "smol-toml";
+ function isFrontmatterValid(frontmatter) {
+   try {
+diff --git a/dist/yaml.js b/dist/yaml.js
+new file mode 100644
+index 000000000..f6727c08f
+--- /dev/null
++++ b/dist/yaml.js
+@@ -0,0 +1,55 @@
++import { CORE_SCHEMA, DUMP_SCHEMA, NOT_RESOLVED, YAMLException, binaryTag, dump as dumpYaml, floatCoreTag, intCoreTag, intYaml11Tag, legacyMapTag, loadAll, mergeTag, omapTag, pairsTag, timestampTag } from "js-yaml";
++
++// v4 resolved binary and signed base-prefixed integers implicitly too.
++const integerTag = {
++  ...intCoreTag,
++  resolve: (source, _explicit, tagName) => source === "-0" ? 0 : intCoreTag.resolve(source, true, tagName)
++};
++
++// Rebuild js-yaml 4's DEFAULT_SCHEMA with the supported js-yaml 5 tag API.
++// YAML11_SCHEMA would turn yes/no/on/off into booleans and 012 into octal.
++const schema = CORE_SCHEMA.withTags(
++  integerTag,
++  {
++    ...floatCoreTag,
++    // v4 accepted .5 but left signed dot-leading forms such as -.5 as strings.
++    resolve: (source, explicit, tagName) => /^[-+]\.[0-9]/.test(source) ? NOT_RESOLVED : floatCoreTag.resolve(source, explicit, tagName)
++  },
++  timestampTag,
++  mergeTag,
++  binaryTag,
++  omapTag,
++  pairsTag,
++  legacyMapTag,
++  {
++    ...legacyMapTag,
++    tagName: "tag:yaml.org,2002:set",
++    identify: () => false,
++    // v4's !!set was an object of null values, not a JavaScript Set.
++    addPair: (container, key, value) => value === null ? legacyMapTag.addPair(container, key, value) : "cannot resolve a set item"
++  }
++);
++
++// Keep v5's broad quoting safeguards (including timestamps and yes/no), and
++// also quote strings such as -0o12 that our v4-compatible integer tag resolves.
++const dumpSchema = DUMP_SCHEMA.withTags({
++  ...intYaml11Tag,
++  resolve: (source, explicit, tagName) => {
++    const result = intYaml11Tag.resolve(source, explicit, tagName);
++    return result === NOT_RESOLVED ? integerTag.resolve(source, explicit, tagName) : result;
++  }
++});
++
++export function dump(value) {
++  return dumpYaml(value, { schema: dumpSchema });
++}
++
++export function load(source, options = {}) {
++  const documents = loadAll(source, { ...options, schema });
++  if (documents.length > 1) {
++    throw new YAMLException("expected a single document in the stream, but found more");
++  }
++  // v4 returned undefined for an empty stream and null for a blank/comment-only document.
++  // Do not use loadAll(source)[0] alone: that would also silently accept extra documents.
++  return documents.length === 0 ? (String(source).length === 0 ? undefined : null) : documents[0];
++}

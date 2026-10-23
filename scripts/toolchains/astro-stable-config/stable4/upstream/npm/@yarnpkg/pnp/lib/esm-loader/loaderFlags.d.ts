@@ -1,0 +1,10 @@
+export declare const HAS_CONSOLIDATED_HOOKS: boolean;
+export declare const HAS_UNFLAGGED_JSON_MODULES: boolean;
+export declare const HAS_JSON_IMPORT_ASSERTION_REQUIREMENT: boolean;
+export declare const WATCH_MODE_MESSAGE_USES_ARRAYS: boolean;
+export declare const HAS_LAZY_LOADED_TRANSLATORS: boolean;
+export declare const HAS_LOADERS_AFFECTING_LOADERS: boolean;
+export declare const ALLOWS_NON_FILE_PARENT: boolean;
+export declare const ALLOWS_EXTENSIONLESS_FILES: boolean;
+export declare const SUPPORTS_IMPORT_ATTRIBUTES: boolean;
+export declare const SUPPORTS_IMPORT_ATTRIBUTES_ONLY: boolean;

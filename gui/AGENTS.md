@@ -8,6 +8,7 @@ This file applies to `gui/` and inherits the repository-wide rules in `/AGENTS.m
 - `gui/dist/` is generated packaged output. Do not edit it by hand.
 - Use the existing component, state, routing, styling, and data-access patterns before introducing a new abstraction.
 - Keep dashboard behavior aligned with the management API and provider configuration model.
+- `gui/design-system/` is the token and component contract for `src/styles.css` and `src/ui.tsx`; read it before adding a visual value or a shared component, and update it in the same change when a token moves.
 
 ## Text and i18n
 
@@ -41,9 +42,18 @@ Hardcoding English (or German) in JSX to “fix” a bad translation is **not** 
 
 ## Required validation
 
-Run all of the following for every functional `gui/` change:
+Use proportional validation during implementation.
 
-```bash
+For a scoped local GUI change:
+
+- Run the smallest focused test file(s) that directly cover the changed behavior.
+- If visible UI copy or locale keys changed, run `bun run lint:i18n`.
+- Run `bun run build` once before claiming the GUI change is complete. This is the browser/bundler validation gate.
+- Stop when those checks pass. Do not expand into adjacent test suites, unrelated component tests, cleanup, or additional verification unless a failure, ambiguous result, or changed shared dependency gives a concrete reason.
+
+Before creating or updating a PR as review-ready, or when the user explicitly asks for full GUI validation, run:
+
+```
 cd gui
 bun test tests
 bun run lint
@@ -52,9 +62,9 @@ bun run build
 
 After any UI-copy or locale change, also run:
 
-```bash
+```
 cd gui
 bun run lint:i18n
 ```
 
-Run the repository-level checks required by any non-GUI files changed in the same work.
+Do not rerun an already-passing check on unchanged code unless a later change can affect what that check proved.

@@ -1274,8 +1274,28 @@ jobs:
         uses: ./.github/actions/setup-project-bun
 
       - name: Install docs-site dependencies
+        id: docs-install
         working-directory: docs-site
         run: bun install --frozen-lockfile
+
+      - name: Retain generated docs lock reconciliation for review
+        if: failure() && steps.docs-install.outcome == 'failure'
+        working-directory: docs-site
+        run: |
+          bun install --lockfile-only --ignore-scripts
+          mkdir -p ../.build/upstream/docs-lock
+          git diff --binary -- bun.lock > ../.build/upstream/docs-lock/generated-lock.patch
+          git rev-parse HEAD > ../.build/upstream/docs-lock/source-commit.txt
+
+      - name: Upload reconciliation without accepting a failed frozen install
+        if: failure() && steps.docs-install.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: opencodex-docs-lock-${{ github.sha }}
+          path: .build/upstream/docs-lock/
+
+      - name: Verify the selected CSS compiler preserves timeline declarations
+        run: node --test scripts/upstream/docs-css-compiler.test.mjs
 
       - name: Build the docs site
         working-directory: docs-site

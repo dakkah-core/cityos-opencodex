@@ -10,6 +10,7 @@
     "packages": []
   },
   "catalog": {
+    "esbuild": "0.28.2",
     "@astrojs/starlight": "0.42.6",
     "@fontsource-variable/geist": "5.3.0",
     "astro": "7.4.2",
@@ -43,6 +44,7 @@
     "simple-icons": "catalog:"
   },
   "devDependencies": {
+    "esbuild": "catalog:",
     "rolldown": "catalog:"
   },
   "patchedDependencies": {

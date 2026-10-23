@@ -492,7 +492,10 @@ describe("GitHub Actions hardening", () => {
     // aggregate while silently skipping the packaging verification.
     const ciPatterns = (Bun.YAML.parse(filters) as { ci?: string[] }).ci ?? [];
     for (const pattern of packaging) {
-      if (pattern === "scripts/prepare-package.ts" || pattern === "scripts/npm-with-catalogs.mjs") continue; // covered by scripts/**
+      if (pattern === "scripts/prepare-package.ts" || pattern === "scripts/npm-with-catalogs.mjs") {
+        expect(ciPatterns).toContain("scripts/**");
+        continue;
+      }
       expect(`${pattern}:${ciPatterns.includes(pattern)}`).toBe(`${pattern}:true`);
     }
   });

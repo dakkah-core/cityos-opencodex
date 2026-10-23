@@ -649,10 +649,29 @@ jobs:
       # gui/package.json. Without this the affected shards die on
       # `Cannot find module 'react/jsx-dev-runtime'` while the other shards pass.
       - name: Install dependencies
+        id: test-install
         run: |
           bun install --frozen-lockfile
-          cd gui
-          bun install --frozen-lockfile
+          (cd gui && bun install --frozen-lockfile)
+          (cd docs-site && bun install --frozen-lockfile)
+          test -f desktop/bun.lock
+          (cd desktop && bun install --frozen-lockfile)
+
+      - name: Retain the generated independent desktop lock for review
+        if: failure() && steps.test-install.outcome == 'failure'
+        working-directory: desktop
+        run: |
+          bun install --lockfile-only --ignore-scripts
+          mkdir -p ../.build/upstream/desktop-lock
+          cp bun.lock ../.build/upstream/desktop-lock/bun.lock
+          git rev-parse HEAD > ../.build/upstream/desktop-lock/source-commit.txt
+
+      - name: Upload the lock without accepting a failed frozen install
+        if: failure() && steps.test-install.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: opencodex-desktop-lock-${{ github.sha }}-${{ matrix.shard }}
+          path: .build/upstream/desktop-lock/
 
       # Nor is the build. Tests that fetch the served dashboard read the session
       # bootstrap meta tags out of `gui/dist/index.html`, so without a build the

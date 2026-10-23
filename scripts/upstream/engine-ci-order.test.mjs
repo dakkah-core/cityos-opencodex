@@ -4,6 +4,15 @@ import { test } from 'node:test';
 
 const workflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
+test('the full source suites install each independently owned dependency domain', () => {
+  const start = workflow.indexOf('id: test-install');
+  assert.ok(start >= 0);
+  const install = workflow.slice(start, workflow.indexOf('\n      - name:', start));
+  for (const domain of ['gui', 'docs-site', 'desktop']) assert.ok(install.includes(`(cd ${domain} && bun install --frozen-lockfile)`), domain);
+  assert.ok(install.includes('test -f desktop/bun.lock'));
+  assert.doesNotMatch(install, /continue-on-error|\|\| true/u);
+});
+
 test('the clean CI runner installs dependencies before the engine typecheck', () => {
   const gates = workflow.slice(workflow.indexOf('\n  gates:\n'));
   assert.ok(gates.startsWith('\n  gates:\n'), 'The maintained gates job must exist');

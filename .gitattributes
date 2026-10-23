@@ -8,3 +8,6 @@
 *.ico binary
 *.zip binary
 *.gz binary
+
+# Preserve the exact registry bytes recorded by stable4/SOURCE.json.
+scripts/toolchains/astro-stable-config/stable4/upstream/npm/jsonc-parser/LICENSE.md -text

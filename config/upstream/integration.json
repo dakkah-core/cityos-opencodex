@@ -24,6 +24,13 @@
   ],
   "changes": [
     {
+      "id": "immutable-license-and-desktop-lock-custody",
+      "purpose": "Preserve exact registry license bytes on every checkout and retain the independently generated desktop catalog lock.",
+      "invariant": "The immutable upstream receipt and license content stay exact; no newline-tolerant hash bypass is introduced, and the desktop lock remains separate from the other domains.",
+      "paths": [".gitattributes", ".gitignore", "desktop/bun.lock"],
+      "tests": ["scripts/upstream/immutable-license.test.mjs", "tests/ci-workflows/toolchain-catalogs.test.ts"]
+    },
+    {
       "id": "launcher-catalog-fixture-closure",
       "purpose": "Materialize the real catalog resolver beside the real Node launcher in isolated runtime fallback fixtures.",
       "invariant": "Launcher fallback, bundled/repair/override precedence and terminal refusal assertions execute the unchanged launcher with its actual dependency closure.",

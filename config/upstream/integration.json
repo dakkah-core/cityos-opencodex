@@ -27,7 +27,7 @@
       "id": "immutable-upstream-record-classification",
       "purpose": "Classify the exact immutable third-party source inventory as recorded data in the file-size guard; preserve its complete source and attribution.",
       "invariant": "Executable source remains capped, existing caps do not increase, and the privacy guard accepts attribution only for the exact LF-normalized record digest.",
-      "paths": ["scripts/file-size-ratchet.ts", "tests/fixtures/file-size-baseline.json", "tests/ci-workflows/privacy-scan-asset-names.test.ts"],
+      "paths": ["scripts/file-size-ratchet.ts", "tests/fixtures/file-size-baseline.json"],
       "tests": ["tests/ci-workflows/file-size-ratchet.test.ts", "tests/ci-workflows/privacy-scan-asset-names.test.ts"]
     },
     {

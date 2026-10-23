@@ -781,6 +781,7 @@ function launcherFallbackFixture(mode: "missing" | "bundled" | "repair" | "broke
     cpSync(repoPath("src"), join(root, "src"), { recursive: true });
     mkdirSync(join(root, "bin"));
     copyFileSync(BIN_OCX, join(root, "bin", "ocx.mjs"));
+    copyFileSync(repoPath("bin/version-catalog.cjs"), join(root, "bin", "version-catalog.cjs"));
     writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2.81.0", dependencies: { bun: "1.4.2" } }));
     writeFileSync(join(root, "src", "cli", "index.ts"), 'console.log(JSON.stringify({source:process.env.OCX_BUN_RUNTIME_SOURCE,path:process.env.OCX_BUN_RUNTIME_PATH}));');
     const pathDir = join(root, "path"); mkdirSync(pathDir);

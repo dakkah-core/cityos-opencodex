@@ -24,6 +24,13 @@
   ],
   "changes": [
     {
+      "id": "launcher-catalog-fixture-closure",
+      "purpose": "Materialize the real catalog resolver beside the real Node launcher in isolated runtime fallback fixtures.",
+      "invariant": "Launcher fallback, bundled/repair/override precedence and terminal refusal assertions execute the unchanged launcher with its actual dependency closure.",
+      "paths": ["tests/cli/ocx-launcher-runtime.test.ts"],
+      "tests": ["tests/cli/ocx-launcher-runtime.test.ts"]
+    },
+    {
       "id": "immutable-upstream-record-classification",
       "purpose": "Classify the exact immutable third-party source inventory as recorded data in the file-size guard; preserve its complete source and attribution.",
       "invariant": "Executable source remains capped, existing caps do not increase, and the privacy guard accepts attribution only for the exact LF-normalized record digest.",

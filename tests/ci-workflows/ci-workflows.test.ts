@@ -482,6 +482,7 @@ describe("GitHub Actions hardening", () => {
       "bun.lock",
       "gui/**",
       "package.json",
+      "scripts/npm-with-catalogs.mjs",
       "scripts/prepare-package.ts",
       "src/**",
     ].sort());
@@ -5123,7 +5124,8 @@ describe("GitHub Actions hardening", () => {
       .split(/\n {6}- name:/)[0]!;
     expect(checkoutStep).toContain("ref: ${{ github.event.repository.default_branch }}");
     expect(checkoutStep).toContain("persist-credentials: false");
-    expect(checkoutStep).toContain("sparse-checkout: .github/scripts");
+    const trustedSparsePaths = checkoutStep.split("sparse-checkout: |\n")[1]?.trim().split("\n").map(line => line.trim());
+    expect(trustedSparsePaths).toEqual([".github/scripts", ".github/actions/setup-project-node", "config/toolchains"]);
 
     const script = workflow
       .split("- name: Validate issue quality")[1]!
@@ -5483,7 +5485,12 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
     const calls = join(dir, "calls");
     for (const path of [output, summary, calls]) writeFileSync(path, "");
     const prelude = String.raw`
-      node() { echo "@fixture/renamed"; }
+      # Drive the real release Bash against controlled publication I/O. The
+      # catalog materializer itself has its separate executable regression suite.
+      node() {
+        if [ "$1" = "scripts/npm-with-catalogs.mjs" ]; then shift; npm "$@";
+        else echo "@fixture/renamed"; fi
+      }
       npm() {
         echo "$*" >> "$CALLS"
         case "$1" in

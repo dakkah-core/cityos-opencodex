@@ -10,7 +10,7 @@
     "@bufbuild/protobuf": "2.16.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@napi-rs/keyring": "2.1.2",
-    "bun": "1.4.3",
+    "bun": "1.4.4",
     "zod": "4.6.7",
     "@types/bun": "1.4.3",
     "typescript": "7.0.2",
@@ -23,7 +23,7 @@
   },
   "catalogs": {
     "test-runner": {
-      "bun": "1.4.3"
+      "bun": "1.4.4"
     }
   },
   "dependencies": {

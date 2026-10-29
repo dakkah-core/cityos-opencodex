@@ -89,15 +89,15 @@ describe("catalog resolution before installation", () => {
 describe("fork tooling sources", () => {
   test("matching stable Bun candidates retain independent roles and a pending unified gate", () => {
     const pkg = read("package.json");
-    expect(resolveBunVersion(pkg, "runtime")).toBe("1.4.3");
-    expect(resolveBunVersion(pkg, "test-runner")).toBe("1.4.3");
+    expect(resolveBunVersion(pkg, "runtime")).toBe("1.4.4");
+    expect(resolveBunVersion(pkg, "test-runner")).toBe("1.4.4");
     expect(pkg.dependencies.bun).toBe("catalog:");
     expect(pkg.testRunnerBun).toBe("catalog:test-runner");
     expect(catalog.bunRoles.candidateStatus).toBe("source-candidate");
     expect(catalog.bunRoles.unifiedLaneStatus).toBe("pending");
     const changed = { ...pkg, catalog: { ...pkg.catalog, bun: "1.5.0" } };
     expect(resolveBunVersion(changed, "runtime")).toBe("1.5.0");
-    expect(resolveBunVersion(changed, "test-runner")).toBe("1.4.3");
+    expect(resolveBunVersion(changed, "test-runner")).toBe("1.4.4");
     const docker = readFileSync(repoPath("Dockerfile"), "utf8");
     const image = /^ARG BUN_IMAGE=oven\/bun:(\d+\.\d+\.\d+)@sha256:[a-f0-9]{64}$/m.exec(docker);
     expect(image?.[1]).toBe(resolveBunVersion(pkg));

@@ -742,7 +742,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       window.clearTimeout(timeout);
       stop();
     };
-    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
+    // oxlint-disable-next-line react/rule-suppression -- existing exhaustive-deps exception is intentional
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loadPresets is a plain async loader
     // like the rest of this file's; a useCallback wrapper trips PreserveManualMemo, and the
     // effect only ever needs the current closure. Verified 2026-08-27: converting both loaders
@@ -894,7 +894,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     if (groups.length === 0) return;
     needsDefaultCollapseRef.current = false;
     const all = new Set(groups.map(group => group.provider));
-    // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler
+    // eslint-disable-next-line react-hooks/set-state-in-effect, react/capitalized-calls, react/error-boundaries, react/globals, react/hooks, react/immutability, react/invariant, react/memo-dependencies, react/no-deriving-state-in-effects, react/preserve-manual-memoization, react/purity, react/refs, react/rule-suppression, react/set-state-in-effect, react/set-state-in-render, react/static-components, react/syntax, react/use-memo, react/void-use-memo
     setCollapsed(all);
     writeCollapsedProviders(all);
   }, [groups]);
@@ -2614,7 +2614,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           {collapseControls}
           <div className="models-provider-list">
             {
-              // eslint-disable-next-line react-hooks/refs, react/react-compiler -- The hover ref is only read by row event handlers nested in this renderer.
+              // eslint-disable-next-line react-hooks/refs, react/capitalized-calls, react/error-boundaries, react/globals, react/hooks, react/immutability, react/invariant, react/memo-dependencies, react/no-deriving-state-in-effects, react/preserve-manual-memoization, react/purity, react/refs, react/rule-suppression, react/set-state-in-effect, react/set-state-in-render, react/static-components, react/syntax, react/use-memo, react/void-use-memo -- The hover ref is only read by row event handlers nested in this renderer.
               visibleGroups.map(group => renderGroup(group))
             }
           </div>

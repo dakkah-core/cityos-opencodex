@@ -95,7 +95,7 @@ export function useAppRouteState() {
      * registered. Without it that change is observed by nobody and the page
      * renders against a hash it no longer matches.
      */
-    // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler -- reconciles a hash changed before the listener existed; the equality check bounds it to one render
+    // eslint-disable-next-line react-hooks/set-state-in-effect, react/capitalized-calls, react/error-boundaries, react/globals, react/hooks, react/immutability, react/invariant, react/memo-dependencies, react/no-deriving-state-in-effects, react/preserve-manual-memoization, react/purity, react/refs, react/rule-suppression, react/set-state-in-effect, react/set-state-in-render, react/static-components, react/syntax, react/use-memo, react/void-use-memo -- reconciles a hash changed before the listener existed; the equality check bounds it to one render
     if (action.page !== page) setPageState(action.page);
   }, [page]);
 

@@ -164,7 +164,7 @@ export default function CodexPoolStrategySetting({
     if (subscribeLoadObserver) return;
     // Not a synchronous cascade: load() reaches `await fetch(...)` before it touches any
     // setter, so state never updates during this effect's own render pass.
-    // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler
+    // eslint-disable-next-line react-hooks/set-state-in-effect, react/capitalized-calls, react/error-boundaries, react/globals, react/hooks, react/immutability, react/invariant, react/memo-dependencies, react/no-deriving-state-in-effects, react/preserve-manual-memoization, react/purity, react/refs, react/rule-suppression, react/set-state-in-effect, react/set-state-in-render, react/static-components, react/syntax, react/use-memo, react/void-use-memo
     void load();
   }, [load, subscribeLoadObserver]);
 

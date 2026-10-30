@@ -218,6 +218,96 @@ describe("fork tooling sources", () => {
   });
 });
 
+describe("OpenTelemetry compatible GUI parent", () => {
+  type Locked = [string, string, {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    optionalPeers?: string[];
+  }, string];
+
+  // Parse real lock tuples as data, preserving the canonical catalog resolver.
+  const packages = (): Record<string, Locked> => Object.fromEntries(
+    readFileSync(repoPath("gui/bun.lock"), "utf8").split("\n").flatMap(line => {
+      const match = /^    ("(?:[^"\\]|\\.)+"): (\[.*\]),?$/.exec(line);
+      return match ? [[JSON.parse(match[1]), JSON.parse(match[2])]] : [];
+    }),
+  );
+  const version = (tuple: Locked) => tuple[0].slice(tuple[0].lastIndexOf("@") + 1);
+  const parents = [
+    ["@opentelemetry/core", ">=1.0.0 <1.10.0"],
+    ["@opentelemetry/resources", ">=1.3.0 <1.10.0"],
+    ["@opentelemetry/sdk-trace", ">=1.3.0 <1.10.0"],
+    ["@opentelemetry/sdk-trace-base", ">=1.3.0 <1.10.0"],
+  ] as const;
+
+  test("the real named parent selector materializes with TS6 and Bun roles intact", () => {
+    const gui = read("gui/package.json");
+    const prepared = materializePackageManifest(gui);
+    expect(gui.catalogs["third-party-api"]["@sentry/node"]).toBe("10.78.0");
+    expect(gui.overrides["react-doctor"]["@sentry/node"]).toBe("catalog:third-party-api");
+    expect(resolveCatalogSpecifier(gui, "@sentry/node", gui.overrides["react-doctor"]["@sentry/node"])).toBe("10.78.0");
+    expect(prepared.overrides["react-doctor"]).toEqual({
+      "@sentry/node": "10.78.0", typescript: "npm:@typescript/typescript6@6.0.2",
+    });
+    expect(gui.catalogs["third-party-api"].typescript).toBe("npm:@typescript/typescript6@6.0.2");
+    expect(gui.catalog.typescript).toBe(catalog.typescript);
+    expect(gui.devDependencies["react-doctor"]).toBe("catalog:");
+    expect(gui.catalog["react-doctor"]).toBe("0.9.18");
+    expect(gui.catalog["@sentry/node"]).toBeUndefined();
+    expect(gui.overrides["@opentelemetry/api"]).toBeUndefined();
+    expect(gui.workspaces).toEqual({ packages: [] });
+    expect(resolveBunVersion(read("package.json"), "runtime")).toBe("1.4.4");
+    expect(resolveBunVersion(read("package.json"), "test-runner")).toBe("1.4.4");
+  });
+
+  // Each case reads the actual lock. Its captured API 1.10.0 fails all four
+  // unchanged required peers; normal resolution must supply a compatible API.
+  test.each(parents)("%s accepts the resolved API with its required peer intact", (name, range) => {
+    const locked = packages();
+    const parent = locked[name];
+    expect(parent[0]).toBe(name + "@2.12.0");
+    expect(parent[2].peerDependencies?.["@opentelemetry/api"]).toBe(range);
+    expect(parent[2].optionalPeers ?? []).not.toContain("@opentelemetry/api");
+    expect(Bun.semver.satisfies(version(locked["@opentelemetry/api"]), range)).toBe(true);
+    expect(Bun.semver.satisfies("1.10.0", range)).toBe(false);
+  });
+
+  test("all actual GUI API consumers accept the compatible resolved API", () => {
+    const locked = packages();
+    const api = version(locked["@opentelemetry/api"]);
+    expect(api).toBe("1.9.1");
+    const consumers = Object.entries(locked).flatMap(([parent, tuple]) =>
+      (["dependencies", "optionalDependencies", "peerDependencies"] as const).flatMap(field => {
+        const range = tuple[2][field]?.["@opentelemetry/api"];
+        return range ? [{ parent, field, range }] : [];
+      }),
+    );
+    expect(consumers).toHaveLength(9);
+    for (const consumer of consumers) expect(Bun.semver.satisfies(api, consumer.range)).toBe(true);
+    const range = locked["@sentry/node"][2].dependencies!["@opentelemetry/api"];
+    expect(range).toBe(">=1.9.1 <1.10.0");
+    expect(Bun.semver.satisfies("1.9.0", range)).toBe(false);
+  });
+
+  test("the real doctor parent and exact Sentry companions stay coherent", () => {
+    const locked = packages();
+    expect(version(locked["react-doctor"])).toBe("0.9.18");
+    const declared = locked["react-doctor"][2].dependencies!["@sentry/node"];
+    expect(declared).toBe("^10.54.0");
+    expect(Bun.semver.satisfies("10.78.0", declared)).toBe(true);
+    expect(Bun.semver.satisfies("11.10.0", declared)).toBe(false);
+    expect(version(locked["@sentry/node"])).toBe("10.78.0");
+    for (const name of ["@sentry/core", "@sentry/node-core", "@sentry/opentelemetry", "@sentry/server-utils"]) {
+      expect(locked["@sentry/node"][2].dependencies?.[name]).toBe("10.78.0");
+      expect(version(locked[name])).toBe("10.78.0");
+    }
+    expect(locked["react-doctor/typescript"][0]).toBe("@typescript/typescript6@6.0.2");
+    expect(version(locked["@opentelemetry/instrumentation"])).toBe("0.220.0");
+    expect(version(locked["@opentelemetry/api-logs"])).toBe("0.220.0");
+  });
+});
+
 // Source contracts run actual isolated compilation and behavior through catalog
 // Node. Generation and docs installation precede installed consumer acceptance.
 import { existsSync as hasStableConfigConsumer } from "node:fs";

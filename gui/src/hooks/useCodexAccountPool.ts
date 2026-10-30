@@ -417,7 +417,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       setInflightCount(count => Math.max(0, count - 1));
       setFirstAttemptSettled(true);
     }
-  // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
+  // oxlint-disable-next-line react/capitalized-calls, react/error-boundaries, react/globals, react/hooks, react/immutability, react/invariant, react/memo-dependencies, react/no-deriving-state-in-effects, react/preserve-manual-memoization, react/purity, react/refs, react/rule-suppression, react/set-state-in-effect, react/set-state-in-render, react/static-components, react/syntax, react/use-memo, react/void-use-memo -- preserve existing callback dependency semantics during Oxlint migration
   }, [apiBase]);
 
   // Initial load plus background refresh. Owned here so mounting or unmounting a surface

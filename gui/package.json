@@ -21,6 +21,7 @@
   },
   "catalogs": {
     "third-party-api": {
+      "@sentry/node": "10.78.0",
       "typescript": "npm:@typescript/typescript6@6.0.2"
     }
   },
@@ -56,6 +57,7 @@
       "nanoid": "catalog:"
     },
     "react-doctor": {
+      "@sentry/node": "catalog:third-party-api",
       "typescript": "catalog:third-party-api"
     }
   },

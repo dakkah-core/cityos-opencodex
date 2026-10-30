@@ -133,7 +133,7 @@ export function DetailPanel({
       onDirtyChange(false);
     }, 0);
     return () => window.clearTimeout(timer);
-    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
+    // oxlint-disable-next-line react/rule-suppression -- existing exhaustive-deps exception is intentional
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: key captures baseline payload
   }, [baselineSyncKey]);
 

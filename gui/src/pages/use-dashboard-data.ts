@@ -362,7 +362,7 @@ const [maBusy, setMaBusy] = useState(false);
     { enabled: overviewReady && !error },
   );
 
-  /* oxlint-disable react/react-compiler -- mirror client-resource snapshots into mutable dashboard UI state that handlers also update */
+  /* oxlint-disable react/capitalized-calls, react/error-boundaries, react/globals, react/hooks, react/immutability, react/invariant, react/memo-dependencies, react/no-deriving-state-in-effects, react/preserve-manual-memoization, react/purity, react/refs, react/rule-suppression, react/set-state-in-effect, react/set-state-in-render, react/static-components, react/syntax, react/use-memo, react/void-use-memo -- mirror client-resource snapshots into mutable dashboard UI state that handlers also update */
   /* eslint-disable react-hooks/set-state-in-effect -- mirror client-resource snapshots into mutable dashboard UI state that handlers also update */
   useEffect(() => {
     if (startupHealthPoll.data !== undefined) {
@@ -477,7 +477,7 @@ const [maBusy, setMaBusy] = useState(false);
     setModelsLoading(modelsPoll.loading);
   }, [modelsPoll.data, modelsPoll.loading]);
   /* eslint-enable react-hooks/set-state-in-effect */
-  /* oxlint-enable react/react-compiler */
+  /* oxlint-enable react/capitalized-calls, react/error-boundaries, react/globals, react/hooks, react/immutability, react/invariant, react/memo-dependencies, react/no-deriving-state-in-effects, react/preserve-manual-memoization, react/purity, react/refs, react/rule-suppression, react/set-state-in-effect, react/set-state-in-render, react/static-components, react/syntax, react/use-memo, react/void-use-memo */
 
   useEffect(() => () => {
     settingsRequestEpochRef.current += 1;
@@ -522,7 +522,7 @@ const [maBusy, setMaBusy] = useState(false);
     },
   );
 
-  /* oxlint-disable react/react-compiler -- mirror update poll snapshot into mutable dashboard UI state */
+  /* oxlint-disable react/set-state-in-effect -- mirror update poll snapshot into mutable dashboard UI state */
   useEffect(() => {
     const data = updatePoll.data;
     if (!data) return;
@@ -530,7 +530,7 @@ const [maBusy, setMaBusy] = useState(false);
     setReconnecting(data.reconnecting);
     if ("reload" in data && data.reload) window.location.reload();
   }, [updatePoll.data]);
-  /* oxlint-enable react/react-compiler */
+  /* oxlint-enable react/set-state-in-effect */
 
   const grouped = useMemo(() => groupDashboardModels(models), [models]);
   const filteredGroups = useMemo(() => {

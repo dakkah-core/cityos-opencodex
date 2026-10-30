@@ -1,5 +1,5 @@
 {
-  "node": "26.12.0",
+  "node": "26.13.0",
   "nodeMajor": 26,
   "nodeEngine": ">=26.0.0 <27.0.0",
   "nodeTypes": "26.6.5",

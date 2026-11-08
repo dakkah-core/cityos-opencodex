@@ -1,5 +1,13 @@
 node_modules/
 dist/
+# The three CLI command symlinks are source metadata; other dist output stays ignored.
+!/dist/
+/dist/*
+!/dist/bin/
+/dist/bin/*
+!/dist/bin/ocx
+!/dist/bin/ocx.mjs
+!/dist/bin/opencodex
 /.build/
 .env
 *.log
